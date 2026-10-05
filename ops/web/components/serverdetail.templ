@@ -1,0 +1,144 @@
+package components
+
+import (
+	"strconv"
+
+	"github.com/mwita-lnx/RedCi/ops/internal/store"
+)
+
+// NginxFile is one config file shown in the read-only browser.
+type NginxFile struct {
+	Path    string
+	Content string
+	SHA256  string
+	Tag     string // ops | bench | other
+}
+
+templ NginxFiles(user store.User, sv store.Server, files []NginxFile) {
+	@Base("Nginx files · "+sv.Name, "/servers", userFromStore(user)) {
+		<header class="page-header">
+			<div>
+				<h1>Nginx files</h1>
+				<p class="sub">{ sv.Name } · read-only view of every file under /etc/nginx</p>
+			</div>
+			<form method="post" action={ templ.SafeURL("/servers/" + strconv.FormatInt(sv.ID, 10) + "/nginx/refresh") }>
+				<button class="btn secondary">Refresh</button>
+			</form>
+		</header>
+		if len(files) == 0 {
+			<section class="panel-box">
+				<p class="sub">No nginx files captured yet. Click Refresh to run <code>list_nginx_configs</code> on this server.</p>
+			</section>
+		}
+		for _, f := range files {
+			<section class="panel-box">
+				<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+					<span class={ "badge", nginxTagClass(f.Tag) }>{ f.Tag }</span>
+					<strong style="font-family:ui-monospace,monospace;font-size:13px">{ f.Path }</strong>
+					<span class="sub" style="margin-left:auto;font-size:12px">{ shortHash(f.SHA256) }</span>
+				</div>
+				<pre class="logbox" style="max-height:40vh"><code>{ f.Content }</code></pre>
+			</section>
+		}
+	}
+}
+
+func nginxTagClass(tag string) string {
+	switch tag {
+	case "ops":
+		return "succeeded"
+	case "bench":
+		return "queued"
+	default:
+		return "cancelled"
+	}
+}
+
+func shortHash(h string) string {
+	if len(h) >= 8 {
+		return h[:8]
+	}
+	return h
+}
+
+// ServerDetailData aggregates a server's resources.
+type ServerDetailData struct {
+	Server  store.Server
+	Benches []store.Bench
+	Sites   []store.Site
+	Routes  []store.ProxyRoute
+}
+
+templ ServerDetail(user store.User, d ServerDetailData) {
+	@Base("Server · "+d.Server.Name, "/servers", userFromStore(user)) {
+		<header class="page-header">
+			<div>
+				<h1>{ d.Server.Name }</h1>
+				<p class="sub">{ d.Server.Hostname }</p>
+			</div>
+			<div style="display:flex;gap:10px;align-items:center">
+				@statusBadge(d.Server.Status)
+				<a class="btn secondary" href={ templ.SafeURL("/servers/" + strconv.FormatInt(d.Server.ID, 10) + "/nginx") }>Nginx files</a>
+			</div>
+		</header>
+
+		<section class="cards">
+			<div class="card"><span class="label">Agent version</span><span class="stat" style="font-size:20px">{ agentVer(d.Server) }</span></div>
+			<div class="card"><span class="label">Benches</span><span class="stat">{ strconv.Itoa(len(d.Benches)) }</span></div>
+			<div class="card"><span class="label">Sites</span><span class="stat">{ strconv.Itoa(len(d.Sites)) }</span></div>
+			<div class="card"><span class="label">Routes</span><span class="stat">{ strconv.Itoa(len(d.Routes)) }</span></div>
+		</section>
+
+		<section class="panel-box">
+			<h2>Benches</h2>
+			<table>
+				<thead><tr><th>Name</th><th>Path</th><th>Frappe</th></tr></thead>
+				<tbody>
+					if len(d.Benches) == 0 {
+						<tr><td colspan="3" style="color:#5B616E">None imported yet.</td></tr>
+					}
+					for _, b := range d.Benches {
+						<tr><td>{ b.Name }</td><td>{ b.Path }</td><td>{ benchFrappe(b) }</td></tr>
+					}
+				</tbody>
+			</table>
+		</section>
+
+		<section class="panel-box">
+			<h2>Sites</h2>
+			<table>
+				<thead><tr><th>Domain</th><th>Status</th><th>SSL</th></tr></thead>
+				<tbody>
+					if len(d.Sites) == 0 {
+						<tr><td colspan="3" style="color:#5B616E">None.</td></tr>
+					}
+					for _, st := range d.Sites {
+						<tr><td>{ st.Domain }</td><td>@statusBadge(st.Status)</td><td>{ sslLabel(st.SslEnabled) }</td></tr>
+					}
+				</tbody>
+			</table>
+		</section>
+
+		<section class="panel-box">
+			<h2>Routes</h2>
+			<table>
+				<thead><tr><th>Domain</th><th>Upstream</th><th>Status</th></tr></thead>
+				<tbody>
+					if len(d.Routes) == 0 {
+						<tr><td colspan="3" style="color:#5B616E">None.</td></tr>
+					}
+					for _, rt := range d.Routes {
+						<tr><td>{ rt.Domain }</td><td>{ rt.Upstream }</td><td>@statusBadge(rt.Status)</td></tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+func benchFrappe(b store.Bench) string {
+	if b.FrappeVersion.Valid && b.FrappeVersion.String != "" {
+		return b.FrappeVersion.String
+	}
+	return "—"
+}

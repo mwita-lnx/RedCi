@@ -1,0 +1,88 @@
+package components
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/mwita-lnx/RedCi/ops/internal/store"
+)
+
+func userDisabled(u store.User) string {
+	if u.Disabled != 0 {
+		return "disabled"
+	}
+	return "active"
+}
+
+func userTOTP(u store.User) string {
+	if len(u.TotpSecretEnc) > 0 {
+		return "enrolled"
+	}
+	return "not set"
+}
+
+func lastLogin(u store.User) string {
+	if u.LastLoginAt.Valid {
+		return time.Unix(u.LastLoginAt.Int64, 0).Format("2006-01-02 15:04")
+	}
+	return "never"
+}
+
+templ Users(user store.User, users []store.User, errMsg string) {
+	@Base("Users", "/users", userFromStore(user)) {
+		<header class="page-header">
+			<div><h1>Users and settings</h1><p class="sub">Panel accounts, roles and 2FA</p></div>
+		</header>
+		<section class="panel-box">
+			<table>
+				<thead><tr><th>Email</th><th>Name</th><th>Role</th><th>2FA</th><th>Status</th><th>Last login</th><th>Actions</th></tr></thead>
+				<tbody>
+					for _, u := range users {
+						<tr>
+							<td>{ u.Email }</td>
+							<td>{ u.Name }</td>
+							<td>@statusBadge(u.Role)</td>
+							<td>{ userTOTP(u) }</td>
+							<td>@statusBadge(userDisabled(u))</td>
+							<td>{ lastLogin(u) }</td>
+							<td>
+								<form method="post" action={ templ.SafeURL("/users/" + strconv.FormatInt(u.ID, 10) + "/reset-totp") } style="display:inline">
+									<button class="btn secondary" style="height:32px;padding:0 10px">Reset 2FA</button>
+								</form>
+								if u.ID != user.ID {
+									<form method="post" action={ templ.SafeURL("/users/" + strconv.FormatInt(u.ID, 10) + "/toggle") } style="display:inline">
+										if u.Disabled != 0 {
+											<button class="btn secondary" style="height:32px;padding:0 10px">Enable</button>
+										} else {
+											<button class="btn secondary" style="height:32px;padding:0 10px">Disable</button>
+										}
+									</form>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+		<section class="panel-box" style="max-width:640px">
+			<h2>Add user</h2>
+			if errMsg != "" {
+				<div class="err">{ errMsg }</div>
+			}
+			<form method="post" action="/users/add" style="display:flex;flex-direction:column;gap:12px">
+				<label class="field">Email<input type="email" name="email" required/></label>
+				<label class="field">Name<input type="text" name="name"/></label>
+				<label class="field">Temporary password<input type="password" name="password" required/></label>
+				<label class="field">Role
+					<select name="role" style="height:44px;border:1px solid #D5D8DE;border-radius:8px;padding:0 12px">
+						<option value="viewer">viewer</option>
+						<option value="deployer">deployer</option>
+						<option value="admin">admin</option>
+					</select>
+				</label>
+				<button class="btn" type="submit" style="justify-content:center">Add user</button>
+			</form>
+			<p class="sub" style="margin-top:10px">The user sets up TOTP on first login.</p>
+		</section>
+	}
+}

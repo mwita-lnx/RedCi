@@ -1,0 +1,19 @@
+[Unit]
+Description=RedCi Ops Panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ops-panel
+ExecStart=/usr/local/bin/ops-panel serve
+EnvironmentFile=/etc/ops-panel/panel.env
+LoadCredential=master.key:/etc/ops-panel/master.key
+Restart=always
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/ops-panel
+
+[Install]
+WantedBy=multi-user.target

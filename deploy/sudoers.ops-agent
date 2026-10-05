@@ -1,0 +1,6 @@
+# /etc/sudoers.d/ops-agent  — validate with: visudo -cf /etc/sudoers.d/ops-agent
+# Replace AGENT_USER with the user the agent runs as (default: ops-agent).
+# The install script writes this file with the correct username substituted in.
+Cmnd_Alias OPS_NGINX = /usr/sbin/nginx -t, /usr/bin/systemctl reload nginx
+Cmnd_Alias OPS_CERT  = /usr/local/sbin/ops-certbot issue *, /usr/local/sbin/ops-certbot list
+AGENT_USER ALL=(root) NOPASSWD: OPS_NGINX, OPS_CERT

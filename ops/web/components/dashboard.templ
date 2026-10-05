@@ -1,0 +1,89 @@
+package components
+
+import (
+	"fmt"
+	"github.com/mwita-lnx/RedCi/ops/internal/store"
+)
+
+// DashboardData is the summary the dashboard renders.
+type DashboardData struct {
+	User          store.User
+	Servers       int64
+	ServersOnline int64
+	Sites         int64
+	WebApps       int64
+	RunningJobs   int64
+
+	// Warnings.
+	ServersOffline int64
+	CertsExpiring  int64
+	DisksLow       int64
+}
+
+// hasWarnings reports whether any warning card should show.
+func (d DashboardData) hasWarnings() bool {
+	return d.ServersOffline > 0 || d.CertsExpiring > 0 || d.DisksLow > 0
+}
+
+templ Dashboard(d DashboardData) {
+	@Base("Dashboard", "/", userFromStore(d.User)) {
+		<header class="page-header">
+			<div>
+				<h1>Dashboard</h1>
+				<p class="sub">{ fmt.Sprintf("%d servers · %d sites · %d web apps", d.Servers, d.Sites, d.WebApps) }</p>
+			</div>
+			<a class="btn" href="/sites/new">New site</a>
+		</header>
+		if d.hasWarnings() {
+			<section class="cards" aria-label="Warnings">
+				if d.ServersOffline > 0 {
+					<div class="card warn">
+						<span class="label">Servers offline</span>
+						<span class="stat">{ fmt.Sprint(d.ServersOffline) }</span>
+						<span class="foot"><a href="/servers">review servers →</a></span>
+					</div>
+				}
+				if d.CertsExpiring > 0 {
+					<div class="card warn">
+						<span class="label">Certificates expiring ≤14d</span>
+						<span class="stat">{ fmt.Sprint(d.CertsExpiring) }</span>
+						<span class="foot">renewal may have failed</span>
+					</div>
+				}
+				if d.DisksLow > 0 {
+					<div class="card warn">
+						<span class="label">Servers low on disk &gt;80%</span>
+						<span class="stat">{ fmt.Sprint(d.DisksLow) }</span>
+						<span class="foot">free space or prune Docker</span>
+					</div>
+				}
+			</section>
+		}
+		<section class="cards" aria-label="Summary">
+			<div class="card">
+				<span class="label">Servers online</span>
+				<span class="stat">{ fmt.Sprint(d.ServersOnline) } <small>/ { fmt.Sprint(d.Servers) }</small></span>
+				<span class="foot ok">Agents reporting</span>
+			</div>
+			<div class="card">
+				<span class="label">Running now</span>
+				<span class="stat">{ fmt.Sprint(d.RunningJobs) }</span>
+				<span class="foot">active jobs</span>
+			</div>
+			<div class="card">
+				<span class="label">Sites</span>
+				<span class="stat">{ fmt.Sprint(d.Sites) }</span>
+				<span class="foot">managed by the panel</span>
+			</div>
+			<div class="card">
+				<span class="label">Web apps</span>
+				<span class="stat">{ fmt.Sprint(d.WebApps) }</span>
+				<span class="foot">Next.js / Docker</span>
+			</div>
+		</section>
+		<section class="panel-box">
+			<h2>Quick start</h2>
+			<p class="sub">Add a server, refresh it to discover benches, then create sites, wire routes and connect GitHub app sources for push-to-deploy. Live job logs stream on each deploy.</p>
+		</section>
+	}
+}

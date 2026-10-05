@@ -1,0 +1,29 @@
+name: redci-panel
+services:
+  panel:
+    image: redci-panel:latest
+    # build:
+    #   context: ..
+    #   dockerfile: ops/Dockerfile
+    #   args: { VERSION: dev }
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      OPS_BASE_URL: "${OPS_BASE_URL:-https://panel.internal}"
+      OPS_LISTEN: "0.0.0.0:8080"
+      OPS_MASTER_KEY: /run/secrets/master_key
+    volumes:
+      - panel-data:/var/lib/panel
+    secrets:
+      - master_key
+    logging:
+      driver: local
+      options: { max-size: "20m", max-file: "5" }
+
+secrets:
+  master_key:
+    file: ./master.key    # generate: openssl rand -hex 32 > deploy/master.key
+
+volumes:
+  panel-data:

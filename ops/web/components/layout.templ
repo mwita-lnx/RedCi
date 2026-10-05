@@ -1,0 +1,101 @@
+package components
+
+import "github.com/mwita-lnx/RedCi/ops/internal/store"
+import "strings"
+
+// NavUser carries just what the shell needs to render the user chip.
+type NavUser struct {
+	Email string
+	Role  string
+}
+
+func userFromStore(u store.User) NavUser {
+	return NavUser{Email: u.Email, Role: u.Role}
+}
+
+func initials(email string) string {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return "?"
+	}
+	return strings.ToUpper(email[:1])
+}
+
+// Base is the outer HTML document shared by every authenticated page.
+templ Base(title string, active string, user NavUser) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } · RedCi</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<script src="/static/htmx.min.js"></script>
+			<script src="/static/sse.js"></script>
+		</head>
+		<body>
+			<div class="shell">
+				@sidebar(active, user)
+				<main class="main">
+					{ children... }
+				</main>
+			</div>
+		</body>
+	</html>
+}
+
+templ sidebar(active string, user NavUser) {
+	<nav class="sidebar" aria-label="Main">
+		<div class="brand">
+			<span class="logo">R</span>
+			<span class="name">RedCi</span>
+		</div>
+		<div class="nav">
+			@navLink("/", "Dashboard", active)
+			@navLink("/sites", "Sites", active)
+			@navLink("/deploys", "Deploys", active)
+			@navLink("/web-apps", "Web apps", active)
+			@navLink("/app-sources", "App sources", active)
+			@navLink("/routes", "Routes and nginx", active)
+			@navLink("/servers", "Servers", active)
+			@navLink("/users", "Users", active)
+			@navLink("/audit", "Audit log", active)
+		</div>
+		<div class="sidebar-footer">
+			<div class="vpn"><span class="dot"></span>Connected over VPN</div>
+			<div class="user-chip">
+				<span class="avatar">{ initials(user.Email) }</span>
+				<span class="meta">
+					<span>{ user.Email }</span>
+					<span class="role">{ strings.Title(user.Role) }</span>
+				</span>
+			</div>
+		</div>
+	</nav>
+}
+
+templ navLink(href, label, active string) {
+	if href == active {
+		<a href={ templ.SafeURL(href) } class="active" aria-current="page">{ label }</a>
+	} else {
+		<a href={ templ.SafeURL(href) }>{ label }</a>
+	}
+}
+
+// AuthBase is the minimal shell for the login / TOTP pages (no sidebar).
+templ AuthBase(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } · RedCi</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+		</head>
+		<body>
+			<div class="auth-wrap">
+				{ children... }
+			</div>
+		</body>
+	</html>
+}

@@ -1,0 +1,64 @@
+package components
+
+// Login renders the email + password form. csrfField is the raw <input> HTML
+// for the CSRF token (produced by gorilla/csrf).
+templ Login(csrfField templ.Component, errMsg string) {
+	@AuthBase("Sign in") {
+		<form class="auth-card" method="post" action="/login">
+			<div class="brand"><span class="logo">R</span><span class="name" style="color:#16181D">RedCi</span></div>
+			<h1>Sign in</h1>
+			if errMsg != "" {
+				<div class="err">{ errMsg }</div>
+			}
+			@csrfField
+			<label class="field">Email
+				<input type="email" name="email" autocomplete="username" required autofocus/>
+			</label>
+			<label class="field">Password
+				<input type="password" name="password" autocomplete="current-password" required/>
+			</label>
+			<button class="btn" type="submit" style="justify-content:center">Continue</button>
+		</form>
+	}
+}
+
+// TOTPVerify renders the 6-digit code form shown after the password step.
+templ TOTPVerify(csrfField templ.Component, errMsg string) {
+	@AuthBase("Two-factor") {
+		<form class="auth-card" method="post" action="/login/totp">
+			<div class="brand"><span class="logo">R</span><span class="name" style="color:#16181D">RedCi</span></div>
+			<h1>Two-factor code</h1>
+			<p class="hint">Enter the 6-digit code from your authenticator app.</p>
+			if errMsg != "" {
+				<div class="err">{ errMsg }</div>
+			}
+			@csrfField
+			<label class="field">Code
+				<input type="text" name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" required autofocus/>
+			</label>
+			<button class="btn" type="submit" style="justify-content:center">Verify</button>
+		</form>
+	}
+}
+
+// EnrollTOTP renders the first-login enrollment page with the QR code and the
+// secret, plus a confirmation code field.
+templ EnrollTOTP(csrfField templ.Component, secret, errMsg string) {
+	@AuthBase("Set up two-factor") {
+		<form class="auth-card" method="post" action="/enroll-totp">
+			<div class="brand"><span class="logo">R</span><span class="name" style="color:#16181D">RedCi</span></div>
+			<h1>Set up two-factor</h1>
+			<p class="hint">Scan this QR code with your authenticator app, then enter the code it shows to confirm.</p>
+			<img class="qr" src="/enroll-totp/qr" alt="TOTP QR code"/>
+			<div class="secret">{ secret }</div>
+			if errMsg != "" {
+				<div class="err">{ errMsg }</div>
+			}
+			@csrfField
+			<label class="field">Confirmation code
+				<input type="text" name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" required autofocus/>
+			</label>
+			<button class="btn" type="submit" style="justify-content:center">Enable 2FA</button>
+		</form>
+	}
+}

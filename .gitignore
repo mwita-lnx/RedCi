@@ -1,0 +1,10 @@
+/bin/
+*.db
+*.db-wal
+*.db-shm
+dev.db*
+/web/static/tailwind.css
+/tmp/
+.env
+master.key
+dist/

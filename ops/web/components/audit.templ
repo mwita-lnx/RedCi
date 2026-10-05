@@ -1,0 +1,61 @@
+package components
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/mwita-lnx/RedCi/ops/internal/store"
+)
+
+func fmtTS(unix int64) string {
+	return time.Unix(unix, 0).Format("2006-01-02 15:04:05")
+}
+
+func nullStr(s store.AuditLog) string {
+	if s.TargetType.Valid {
+		if s.TargetID.Valid {
+			return s.TargetType.String + ":" + strconv.FormatInt(s.TargetID.Int64, 10)
+		}
+		return s.TargetType.String
+	}
+	return "—"
+}
+
+func ipOf(a store.AuditLog) string {
+	if a.Ip.Valid {
+		return a.Ip.String
+	}
+	return "—"
+}
+
+templ AuditLog(user store.User, rows []store.AuditLog) {
+	@Base("Audit log", "/audit", userFromStore(user)) {
+		<header class="page-header">
+			<div>
+				<h1>Audit log</h1>
+				<p class="sub">Every mutating action, most recent first</p>
+			</div>
+		</header>
+		<section class="panel-box">
+			<table>
+				<thead>
+					<tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>IP</th></tr>
+				</thead>
+				<tbody>
+					if len(rows) == 0 {
+						<tr><td colspan="5" style="color:#5B616E">No audit entries yet.</td></tr>
+					}
+					for _, a := range rows {
+						<tr>
+							<td>{ fmtTS(a.Ts) }</td>
+							<td>{ a.Actor }</td>
+							<td>{ a.Action }</td>
+							<td>{ nullStr(a) }</td>
+							<td>{ ipOf(a) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}

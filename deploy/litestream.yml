@@ -1,0 +1,9 @@
+# /etc/litestream.yml — continuous replication of panel.db to S3/MinIO.
+dbs:
+  - path: /var/lib/ops-panel/panel.db
+    replicas:
+      - type: s3
+        bucket: ops-panel-backups
+        path: panel
+        endpoint: https://minio.internal:9000
+        retention: 720h

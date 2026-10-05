@@ -1,0 +1,44 @@
+package components
+
+import (
+	"strconv"
+
+	"github.com/mwita-lnx/RedCi/ops/internal/store"
+)
+
+templ Deploys(user store.User, rows []store.Deploy) {
+	@Base("Deploys", "/deploys", userFromStore(user)) {
+		<header class="page-header">
+			<div>
+				<h1>Deploys</h1>
+				<p class="sub">Every operation, most recent first</p>
+			</div>
+		</header>
+		<section class="panel-box">
+			<table>
+				<thead>
+					<tr><th>#</th><th>Kind</th><th>Target</th><th>Trigger</th><th>Status</th><th>Created</th></tr>
+				</thead>
+				<tbody>
+					if len(rows) == 0 {
+						<tr><td colspan="6" style="color:#5B616E">No deploys yet.</td></tr>
+					}
+					for _, d := range rows {
+						<tr>
+							<td>{ strconv.FormatInt(d.ID, 10) }</td>
+							<td>{ d.Kind }</td>
+							<td>{ d.TargetType }:{ strconv.FormatInt(d.TargetID, 10) }</td>
+							<td>{ d.Trigger }</td>
+							<td>@statusBadge(d.Status)</td>
+							<td>{ fmtTS(d.CreatedAt) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+templ statusBadge(status string) {
+	<span class={ "badge", status }>{ status }</span>
+}

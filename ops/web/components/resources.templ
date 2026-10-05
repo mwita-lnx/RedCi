@@ -1,0 +1,265 @@
+package components
+
+import (
+	"strconv"
+
+	"github.com/mwita-lnx/RedCi/ops/internal/store"
+)
+
+func i64(v int64) string { return strconv.FormatInt(v, 10) }
+
+func nullString(s store.ProxyRoute) string {
+	if s.ConfigHash.Valid {
+		return s.ConfigHash.String[:min(8, len(s.ConfigHash.String))]
+	}
+	return "—"
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// --- Servers ---
+
+templ Servers(user store.User, servers []store.Server) {
+	@Base("Servers", "/servers", userFromStore(user)) {
+		<header class="page-header">
+			<div><h1>Servers</h1><p class="sub">On-prem servers and their agents</p></div>
+			<a class="btn" href="/servers/add">Add server</a>
+		</header>
+		<section class="panel-box">
+			<table>
+				<thead><tr><th>Name</th><th>Hostname</th><th>Status</th><th>Agent</th><th>Actions</th></tr></thead>
+				<tbody>
+					if len(servers) == 0 {
+						<tr><td colspan="5" style="color:#5B616E">No servers yet. Add one to get started.</td></tr>
+					}
+					for _, sv := range servers {
+						<tr>
+							<td><a href={ templ.SafeURL("/servers/" + i64(sv.ID)) }>{ sv.Name }</a></td>
+							<td>{ sv.Hostname }</td>
+							<td>@statusBadge(sv.Status)</td>
+							<td>{ agentVer(sv) }</td>
+							<td>
+								<form method="post" action={ templ.SafeURL("/servers/" + i64(sv.ID) + "/refresh") } style="display:inline">
+									<button class="btn secondary" style="height:32px;padding:0 12px">Refresh</button>
+								</form>
+								<form method="post" action={ templ.SafeURL("/servers/" + i64(sv.ID) + "/import") } style="display:inline">
+									<button class="btn secondary" style="height:32px;padding:0 12px">Import discovered</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+func agentVer(s store.Server) string {
+	if s.AgentVersion.Valid && s.AgentVersion.String != "" {
+		return s.AgentVersion.String
+	}
+	return "—"
+}
+
+templ ServerAdd(user store.User, enrollCmd, errMsg string) {
+	@Base("Add server", "/servers", userFromStore(user)) {
+		<header class="page-header"><div><h1>Add server</h1><p class="sub">Create a one-time enrollment token</p></div></header>
+		<section class="panel-box" style="max-width:640px">
+			if errMsg != "" {
+				<div class="err">{ errMsg }</div>
+			}
+			if enrollCmd != "" {
+				<p class="sub">Run this on the server within 1 hour (shown once):</p>
+				<div class="secret" style="text-align:left">{ enrollCmd }</div>
+				<p style="margin-top:16px"><a href="/servers">← Back to servers</a></p>
+			} else {
+				<form method="post" action="/servers/add" style="display:flex;flex-direction:column;gap:14px">
+					<label class="field">Name<input type="text" name="name" required placeholder="srv1"/></label>
+					<label class="field">Hostname<input type="text" name="hostname" placeholder="srv1.internal"/></label>
+					<button class="btn" type="submit" style="justify-content:center">Create enrollment token</button>
+				</form>
+			}
+		</section>
+	}
+}
+
+// --- Sites ---
+
+templ Sites(user store.User, sites []store.Site) {
+	@Base("Sites", "/sites", userFromStore(user)) {
+		<header class="page-header">
+			<div><h1>Sites</h1><p class="sub">Frappe sites managed by the panel</p></div>
+			<a class="btn" href="/sites/new">New site</a>
+		</header>
+		<section class="panel-box">
+			<table>
+				<thead><tr><th>Domain</th><th>Status</th><th>SSL</th><th>Actions</th></tr></thead>
+				<tbody>
+					if len(sites) == 0 {
+						<tr><td colspan="4" style="color:#5B616E">No sites yet.</td></tr>
+					}
+					for _, st := range sites {
+						<tr>
+							<td>{ st.Domain }</td>
+							<td>@statusBadge(st.Status)</td>
+							<td>{ sslLabel(st.SslEnabled) }</td>
+							<td>
+								<form method="post" action={ templ.SafeURL("/sites/" + i64(st.ID) + "/backup") } style="display:inline">
+									<button class="btn secondary" style="height:32px;padding:0 12px">Backup</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+func sslLabel(v int64) string {
+	if v != 0 {
+		return "on"
+	}
+	return "off"
+}
+
+templ NewSite(user store.User, benches []store.Bench, errMsg string) {
+	@Base("New site", "/sites", userFromStore(user)) {
+		<header class="page-header"><div><h1>New site</h1><p class="sub">Create a Frappe site with apps and optional SSL</p></div></header>
+		<section class="panel-box" style="max-width:640px">
+			if errMsg != "" {
+				<div class="err">{ errMsg }</div>
+			}
+			if len(benches) == 0 {
+				<p class="sub">No benches yet. Add a server, refresh it, and import its benches first.</p>
+			} else {
+				<form method="post" action="/sites/new" style="display:flex;flex-direction:column;gap:14px">
+					<label class="field">Bench
+						<select name="bench_id" required style="height:44px;border:1px solid #D5D8DE;border-radius:8px;padding:0 12px">
+							for _, b := range benches {
+								<option value={ i64(b.ID) }>{ b.Path }</option>
+							}
+						</select>
+					</label>
+					<label class="field">Domain<input type="text" name="domain" required placeholder="client1.example.com"/></label>
+					<label class="field">Apps (comma or space separated)<input type="text" name="apps" required placeholder="erpnext hrms"/></label>
+					<label class="field">Admin password<input type="password" name="admin_password" required/></label>
+					<label class="field">DB root password<input type="password" name="db_root_password" required/></label>
+					<label class="field">Let's Encrypt email (for SSL)<input type="email" name="le_email" placeholder="ops@example.com"/></label>
+					<label style="display:flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" name="ssl"/> Enable SSL</label>
+					<button class="btn" type="submit" style="justify-content:center">Create site</button>
+				</form>
+			}
+		</section>
+	}
+}
+
+// --- App sources ---
+
+templ AppSources(user store.User, sources []store.AppSource) {
+	@Base("App sources", "/app-sources", userFromStore(user)) {
+		<header class="page-header"><div><h1>App sources</h1><p class="sub">GitHub repos the panel deploys from</p></div></header>
+		<section class="panel-box">
+			<table>
+				<thead><tr><th>Name</th><th>Repo</th><th>Branch</th><th>Kind</th><th>Auto-deploy</th></tr></thead>
+				<tbody>
+					if len(sources) == 0 {
+						<tr><td colspan="5" style="color:#5B616E">No app sources yet.</td></tr>
+					}
+					for _, src := range sources {
+						<tr>
+							<td>{ src.Name }</td><td>{ src.Repo }</td><td>{ src.Branch }</td><td>{ src.Kind }</td>
+							<td>{ sslLabel(src.AutoDeploy) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+		<section class="panel-box" style="max-width:640px">
+			<h2>Add app source</h2>
+			<form method="post" action="/app-sources/add" style="display:flex;flex-direction:column;gap:12px">
+				<label class="field">Name<input type="text" name="name" required placeholder="erpnext"/></label>
+				<label class="field">Repo (owner/name)<input type="text" name="repo" required placeholder="myorg/erpnext"/></label>
+				<label class="field">Branch<input type="text" name="branch" placeholder="main"/></label>
+				<label class="field">Kind
+					<select name="kind" style="height:44px;border:1px solid #D5D8DE;border-radius:8px;padding:0 12px">
+						<option value="frappe">frappe</option>
+						<option value="web">web</option>
+					</select>
+				</label>
+				<label style="display:flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" name="auto_deploy" checked/> Auto-deploy on push</label>
+				<button class="btn" type="submit" style="justify-content:center">Add</button>
+			</form>
+		</section>
+	}
+}
+
+// --- Web apps ---
+
+templ WebApps(user store.User, apps []store.WebApp) {
+	@Base("Web apps", "/web-apps", userFromStore(user)) {
+		<header class="page-header"><div><h1>Web apps</h1><p class="sub">Next.js / Docker apps</p></div></header>
+		<section class="panel-box">
+			<table>
+				<thead><tr><th>Name</th><th>Port</th><th>Status</th><th>Commit</th></tr></thead>
+				<tbody>
+					if len(apps) == 0 {
+						<tr><td colspan="4" style="color:#5B616E">No web apps yet.</td></tr>
+					}
+					for _, a := range apps {
+						<tr>
+							<td>{ a.Name }</td>
+							<td>127.0.0.1:{ i64(a.InternalPort) }</td>
+							<td>@statusBadge(a.Status)</td>
+							<td>{ commitShort(a) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}
+
+func commitShort(a store.WebApp) string {
+	if a.CurrentCommit.Valid && len(a.CurrentCommit.String) >= 7 {
+		return a.CurrentCommit.String[:7]
+	}
+	return "—"
+}
+
+// --- Routes ---
+
+templ Routes(user store.User, routes []store.ProxyRoute) {
+	@Base("Routes and nginx", "/routes", userFromStore(user)) {
+		<header class="page-header"><div><h1>Routes and nginx</h1><p class="sub">Proxy routes the agent manages under /etc/nginx/ops.d</p></div></header>
+		<section class="panel-box">
+			<table>
+				<thead><tr><th>Domain</th><th>Upstream</th><th>SSL</th><th>Status</th><th>Hash</th><th>Actions</th></tr></thead>
+				<tbody>
+					if len(routes) == 0 {
+						<tr><td colspan="6" style="color:#5B616E">No routes yet.</td></tr>
+					}
+					for _, rt := range routes {
+						<tr>
+							<td>{ rt.Domain }</td>
+							<td>{ rt.Upstream }</td>
+							<td>{ sslLabel(rt.SslEnabled) }</td>
+							<td>@statusBadge(rt.Status)</td>
+							<td>{ nullString(rt) }</td>
+							<td>
+								<form method="post" action={ templ.SafeURL("/routes/" + i64(rt.ID) + "/apply") } style="display:inline">
+									<button class="btn secondary" style="height:32px;padding:0 12px">Apply</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</section>
+	}
+}

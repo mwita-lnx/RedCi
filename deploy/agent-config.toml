@@ -1,0 +1,23 @@
+# RedCi agent configuration. Env vars (OPS_PANEL_URL, OPS_AGENT_*) override
+# any value here.
+
+# Panel base URL the agent polls (outbound only).
+panel_url = "https://panel.internal"
+
+# Bench directories this agent is allowed to operate on.
+# Adjust to wherever frappe-bench is installed on this server.
+bench_roots = ["/home/frappe/frappe-bench"]
+
+# Where web-app (Next.js/Docker) checkouts and compose files live.
+apps_root = "/srv/ops/apps"
+
+# PATH additions so `bench` and the bench's Node.js are found.
+bench_path_env = "/home/frappe/.local/bin:/home/frappe/frappe-bench/env/bin"
+
+# Where the enrollment credential ({server_id, token}) is stored, mode 0600.
+credential_file = "/var/lib/ops-agent/credential"
+
+# Optional: pin the panel's private CA for TLS verification.
+# ca_file = "/etc/ops-agent/panel-ca.pem"
+
+log_level = "info"

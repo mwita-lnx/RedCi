@@ -1,0 +1,53 @@
+package components
+
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/mwita-lnx/RedCi/ops/internal/store"
+)
+
+func jobStreamURL(id int64) string {
+	return "/jobs/" + strconv.FormatInt(id, 10) + "/stream"
+}
+
+func jobTitle(j store.Job) string {
+	return fmt.Sprintf("Job %d · %s", j.ID, j.Type)
+}
+
+func jobErr(j store.Job) string {
+	if j.Error.Valid {
+		return j.Error.String
+	}
+	return ""
+}
+
+templ JobDetail(user store.User, job store.Job, logs []store.JobLog) {
+	@Base(jobTitle(job), "/deploys", userFromStore(user)) {
+		<header class="page-header">
+			<div>
+				<h1>{ jobTitle(job) }</h1>
+				<p class="sub">server { strconv.FormatInt(job.ServerID, 10) } · attempt { strconv.FormatInt(job.Attempt, 10) }/{ strconv.FormatInt(job.MaxAttempts, 10) }</p>
+			</div>
+			<div id="job-status">@statusBadge(job.Status)</div>
+		</header>
+		if jobErr(job) != "" {
+			<div class="err">{ jobErr(job) }</div>
+		}
+		<section class="panel-box">
+			<h2>Live log</h2>
+			<div
+				class="logbox"
+				hx-ext="sse"
+				sse-connect={ jobStreamURL(job.ID) }
+			>
+				<div sse-swap="log" hx-swap="beforeend" class="loglines">
+					for _, ln := range logs {
+						<div class={ "logline", ln.Stream }>{ ln.Line }</div>
+					}
+				</div>
+				<div sse-swap="status" hx-target="#job-status" hx-swap="innerHTML" style="display:none"></div>
+			</div>
+		</section>
+	}
+}

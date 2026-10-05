@@ -1,0 +1,14 @@
+[Unit]
+Description=RedCi Ops Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=AGENT_USER
+ExecStart=/usr/local/bin/ops-agent run
+Restart=always
+RestartSec=5
+Environment=HOME=/home/AGENT_USER
+
+[Install]
+WantedBy=multi-user.target
