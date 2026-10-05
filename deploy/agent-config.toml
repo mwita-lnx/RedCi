@@ -6,12 +6,13 @@ panel_url = "https://panel.internal"
 
 # Bench directories this agent is allowed to operate on.
 # Adjust to wherever frappe-bench is installed on this server.
-bench_roots = ["/home/frappe/frappe-bench"]
+bench_roots = ["/home/frappe/frappe-bench"]   # adjust to your bench location
 
 # Where web-app (Next.js/Docker) checkouts and compose files live.
 apps_root = "/srv/ops/apps"
 
-# PATH additions so `bench` and the bench's Node.js are found.
+# PATH additions so `bench` and its Node.js/pip are found in job steps.
+# Common locations: ~/.local/bin (bench CLI), bench/env/bin (pip/python).
 bench_path_env = "/home/frappe/.local/bin:/home/frappe/frappe-bench/env/bin"
 
 # Where the enrollment credential ({server_id, token}) is stored, mode 0600.

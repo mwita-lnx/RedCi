@@ -22,6 +22,14 @@ func jobErr(j store.Job) string {
 	return ""
 }
 
+func jobFinished(j store.Job) bool {
+	switch j.Status {
+	case "succeeded", "failed", "cancelled", "lost":
+		return true
+	}
+	return false
+}
+
 templ JobDetail(user store.User, job store.Job, logs []store.JobLog) {
 	@Base(jobTitle(job), "/deploys", userFromStore(user)) {
 		<header class="page-header">
@@ -32,22 +40,35 @@ templ JobDetail(user store.User, job store.Job, logs []store.JobLog) {
 			<div id="job-status">@statusBadge(job.Status)</div>
 		</header>
 		if jobErr(job) != "" {
-			<div class="err">{ jobErr(job) }</div>
+			<div class="err" style="margin-bottom:16px">{ jobErr(job) }</div>
 		}
 		<section class="panel-box">
-			<h2>Live log</h2>
-			<div
-				class="logbox"
-				hx-ext="sse"
-				sse-connect={ jobStreamURL(job.ID) }
-			>
-				<div sse-swap="log" hx-swap="beforeend" class="loglines">
-					for _, ln := range logs {
-						<div class={ "logline", ln.Stream }>{ ln.Line }</div>
-					}
+			<h2>Log</h2>
+			if jobFinished(job) {
+				<div class="logbox">
+					<div class="loglines">
+						if len(logs) == 0 {
+							<div class="logline stderr" style="color:#5B616E">No log output recorded.</div>
+						}
+						for _, ln := range logs {
+							<div class={ "logline", ln.Stream }>{ ln.Line }</div>
+						}
+					</div>
 				</div>
-				<div sse-swap="status" hx-target="#job-status" hx-swap="innerHTML" style="display:none"></div>
-			</div>
+			} else {
+				<div
+					class="logbox"
+					hx-ext="sse"
+					sse-connect={ jobStreamURL(job.ID) }
+				>
+					<div sse-swap="log" hx-swap="beforeend" class="loglines">
+						for _, ln := range logs {
+							<div class={ "logline", ln.Stream }>{ ln.Line }</div>
+						}
+					</div>
+					<div sse-swap="status" hx-target="#job-status" hx-swap="innerHTML" style="display:none"></div>
+				</div>
+			}
 		</section>
 	}
 }

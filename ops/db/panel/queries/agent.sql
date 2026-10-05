@@ -138,7 +138,12 @@ UPDATE deploys SET status = ?, finished_at = unixepoch() WHERE id = ?;
 SELECT * FROM deploys WHERE id = ? LIMIT 1;
 
 -- name: ListRecentDeploys :many
-SELECT * FROM deploys ORDER BY created_at DESC LIMIT ?;
+SELECT
+  d.*,
+  (SELECT j.id FROM jobs j WHERE j.deploy_id = d.id ORDER BY j.seq DESC LIMIT 1) AS last_job_id,
+  (SELECT j.error FROM jobs j WHERE j.deploy_id = d.id AND j.error IS NOT NULL ORDER BY j.seq DESC LIMIT 1) AS last_error
+FROM deploys d
+ORDER BY d.created_at DESC LIMIT ?;
 
 -- name: CountDeployJobsByStatus :one
 SELECT

@@ -77,7 +77,7 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
+		h.Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "same-origin")
 		if !s.cfg.Dev {
@@ -97,7 +97,7 @@ func (s *Server) requireLogin(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		if !s.auth.HasTOTP(user) && r.URL.Path != "/enroll-totp" {
+		if !s.auth.HasTOTP(user) && r.URL.Path != "/enroll-totp" && r.URL.Path != "/enroll-totp/qr" {
 			http.Redirect(w, r, "/enroll-totp", http.StatusSeeOther)
 			return
 		}

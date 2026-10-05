@@ -14,7 +14,7 @@ import (
 
 func (s *Server) handleDeploys(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFrom(r.Context())
-	rows, err := s.db.ReadQ.ListRecentDeploys(r.Context(), 50)
+	rows, err := s.db.ReadQ.ListRecentDeploys(r.Context(), 100)
 	if err != nil {
 		http.Error(w, "could not load deploys", http.StatusInternalServerError)
 		return

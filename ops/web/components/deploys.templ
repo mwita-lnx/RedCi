@@ -6,7 +6,21 @@ import (
 	"github.com/mwita-lnx/RedCi/ops/internal/store"
 )
 
-templ Deploys(user store.User, rows []store.Deploy) {
+func deployJobURL(d store.ListRecentDeploysRow) string {
+	if d.LastJobID != 0 {
+		return "/jobs/" + strconv.FormatInt(d.LastJobID, 10)
+	}
+	return ""
+}
+
+func deployError(d store.ListRecentDeploysRow) string {
+	if d.LastError.Valid {
+		return d.LastError.String
+	}
+	return ""
+}
+
+templ Deploys(user store.User, rows []store.ListRecentDeploysRow) {
 	@Base("Deploys", "/deploys", userFromStore(user)) {
 		<header class="page-header">
 			<div>
@@ -17,11 +31,11 @@ templ Deploys(user store.User, rows []store.Deploy) {
 		<section class="panel-box">
 			<table>
 				<thead>
-					<tr><th>#</th><th>Kind</th><th>Target</th><th>Trigger</th><th>Status</th><th>Created</th></tr>
+					<tr><th>#</th><th>Kind</th><th>Target</th><th>Trigger</th><th>Status</th><th>Error</th><th>Created</th><th></th></tr>
 				</thead>
 				<tbody>
 					if len(rows) == 0 {
-						<tr><td colspan="6" style="color:#5B616E">No deploys yet.</td></tr>
+						<tr><td colspan="8" style="color:#5B616E">No deploys yet.</td></tr>
 					}
 					for _, d := range rows {
 						<tr>
@@ -30,7 +44,13 @@ templ Deploys(user store.User, rows []store.Deploy) {
 							<td>{ d.TargetType }:{ strconv.FormatInt(d.TargetID, 10) }</td>
 							<td>{ d.Trigger }</td>
 							<td>@statusBadge(d.Status)</td>
+							<td style="color:#C8102E;font-size:13px;max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{ deployError(d) }</td>
 							<td>{ fmtTS(d.CreatedAt) }</td>
+							<td>
+								if deployJobURL(d) != "" {
+									<a href={ templ.SafeURL(deployJobURL(d)) } class="btn secondary" style="height:28px;padding:0 10px;font-size:13px">View logs</a>
+								}
+							</td>
 						</tr>
 					}
 				</tbody>

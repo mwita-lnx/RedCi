@@ -80,7 +80,7 @@ type Querier interface {
 	ListJobsForDeploy(ctx context.Context, deployID sql.NullInt64) ([]Job, error)
 	ListProxyRoutes(ctx context.Context) ([]ProxyRoute, error)
 	ListProxyRoutesForServer(ctx context.Context, serverID int64) ([]ProxyRoute, error)
-	ListRecentDeploys(ctx context.Context, limit int64) ([]Deploy, error)
+	ListRecentDeploys(ctx context.Context, limit int64) ([]ListRecentDeploysRow, error)
 	ListServers(ctx context.Context) ([]Server, error)
 	ListSites(ctx context.Context) ([]Site, error)
 	ListUsers(ctx context.Context) ([]User, error)

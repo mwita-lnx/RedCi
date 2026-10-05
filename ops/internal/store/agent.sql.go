@@ -635,18 +635,38 @@ func (q *Queries) ListJobsForDeploy(ctx context.Context, deployID sql.NullInt64)
 }
 
 const listRecentDeploys = `-- name: ListRecentDeploys :many
-SELECT id, kind, target_type, target_id, commit_sha, "trigger", user_id, status, created_at, finished_at FROM deploys ORDER BY created_at DESC LIMIT ?
+SELECT
+  d.id, d.kind, d.target_type, d.target_id, d.commit_sha, d."trigger", d.user_id, d.status, d.created_at, d.finished_at,
+  (SELECT j.id FROM jobs j WHERE j.deploy_id = d.id ORDER BY j.seq DESC LIMIT 1) AS last_job_id,
+  (SELECT j.error FROM jobs j WHERE j.deploy_id = d.id AND j.error IS NOT NULL ORDER BY j.seq DESC LIMIT 1) AS last_error
+FROM deploys d
+ORDER BY d.created_at DESC LIMIT ?
 `
 
-func (q *Queries) ListRecentDeploys(ctx context.Context, limit int64) ([]Deploy, error) {
+type ListRecentDeploysRow struct {
+	ID         int64          `json:"id"`
+	Kind       string         `json:"kind"`
+	TargetType string         `json:"target_type"`
+	TargetID   int64          `json:"target_id"`
+	CommitSha  sql.NullString `json:"commit_sha"`
+	Trigger    string         `json:"trigger"`
+	UserID     sql.NullInt64  `json:"user_id"`
+	Status     string         `json:"status"`
+	CreatedAt  int64          `json:"created_at"`
+	FinishedAt sql.NullInt64  `json:"finished_at"`
+	LastJobID  int64          `json:"last_job_id"`
+	LastError  sql.NullString `json:"last_error"`
+}
+
+func (q *Queries) ListRecentDeploys(ctx context.Context, limit int64) ([]ListRecentDeploysRow, error) {
 	rows, err := q.db.QueryContext(ctx, listRecentDeploys, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Deploy{}
+	items := []ListRecentDeploysRow{}
 	for rows.Next() {
-		var i Deploy
+		var i ListRecentDeploysRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Kind,
@@ -658,6 +678,8 @@ func (q *Queries) ListRecentDeploys(ctx context.Context, limit int64) ([]Deploy,
 			&i.Status,
 			&i.CreatedAt,
 			&i.FinishedAt,
+			&i.LastJobID,
+			&i.LastError,
 		); err != nil {
 			return nil, err
 		}

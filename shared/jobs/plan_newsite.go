@@ -16,7 +16,7 @@ func (p NewSiteParams) Steps(ctx PlanContext) ([]Step, error) {
 			Command: "bench",
 			Args: []string{
 				"new-site", p.Domain,
-				"--db-root-username", "ops_admin",
+				"--db-root-username", "root",
 				"--db-root-password", dbRoot,
 				"--admin-password", admin,
 			},
