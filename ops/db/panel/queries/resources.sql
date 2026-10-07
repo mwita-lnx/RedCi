@@ -11,6 +11,9 @@ SELECT * FROM app_sources ORDER BY name;
 -- name: GetAppSource :one
 SELECT * FROM app_sources WHERE id = ? LIMIT 1;
 
+-- name: GetAppSourceByName :one
+SELECT * FROM app_sources WHERE name = ? LIMIT 1;
+
 -- name: FindAppSourcesByRepoBranch :many
 SELECT * FROM app_sources WHERE repo = ? AND branch = ? AND auto_deploy = 1;
 
@@ -33,6 +36,9 @@ SELECT * FROM benches WHERE server_id = ? ORDER BY path;
 -- name: GetBench :one
 SELECT * FROM benches WHERE id = ? LIMIT 1;
 
+-- name: SetBenchFacts :exec
+UPDATE benches SET facts_json = ?, frappe_version = ? WHERE id = ?;
+
 -- name: CreateFrappeApp :one
 INSERT INTO frappe_apps (bench_id, app_source_id, app_name, current_commit)
 VALUES (?, ?, ?, ?)
@@ -48,6 +54,21 @@ WHERE fa.app_source_id = ?;
 
 -- name: SetFrappeAppCommit :exec
 UPDATE frappe_apps SET current_commit = ? WHERE bench_id = ? AND app_name = ?;
+
+-- name: SetFrappeAppCommits :exec
+UPDATE frappe_apps SET previous_commit = ?, current_commit = ?
+WHERE bench_id = ? AND app_name = ?;
+
+-- name: UpsertDeployPoint :exec
+INSERT INTO frappe_deploy_points (bench_id, app_name, prev_commit, backups_json)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (bench_id, app_name)
+DO UPDATE SET prev_commit = excluded.prev_commit,
+              backups_json = excluded.backups_json,
+              created_at = unixepoch();
+
+-- name: GetDeployPoint :one
+SELECT * FROM frappe_deploy_points WHERE bench_id = ? AND app_name = ? LIMIT 1;
 
 -- name: CreateSite :one
 INSERT INTO sites (bench_id, domain, status, apps_json, ssl_enabled)
@@ -65,6 +86,15 @@ SELECT * FROM sites WHERE domain = ? LIMIT 1;
 
 -- name: SetSiteStatus :exec
 UPDATE sites SET status = ? WHERE id = ?;
+
+-- name: UpdateSiteApps :exec
+UPDATE sites SET apps_json = ? WHERE id = ?;
+
+-- name: ArchiveSite :exec
+UPDATE sites SET status = 'archived' WHERE id = ?;
+
+-- name: DeleteSiteRow :exec
+DELETE FROM sites WHERE id = ?;
 
 -- name: SetSiteSSL :exec
 UPDATE sites SET ssl_enabled = ?, ssl_expires_at = ? WHERE id = ?;

@@ -50,6 +50,9 @@ func Load() (Config, error) {
 	if v := os.Getenv("OPS_AGENT_BENCH_ROOTS"); v != "" {
 		c.BenchRoots = strings.Split(v, ",")
 	}
+	if v := os.Getenv("OPS_AGENT_BENCH_PATH_ENV"); v != "" {
+		c.BenchPathEnv = v
+	}
 	if v := os.Getenv("OPS_AGENT_APPS_ROOT"); v != "" {
 		c.AppsRoot = v
 	}

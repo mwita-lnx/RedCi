@@ -12,6 +12,7 @@ import (
 
 	"github.com/mwita-lnx/RedCi/ops/internal/events"
 	"github.com/mwita-lnx/RedCi/ops/internal/store"
+	"github.com/mwita-lnx/RedCi/shared/jobs"
 	"github.com/mwita-lnx/RedCi/shared/protocol"
 )
 
@@ -234,9 +235,61 @@ func (s *Server) handleAgentJobResult(w http.ResponseWriter, r *http.Request) {
 		ResultJson: nullStr(string(req.Result)),
 		ID:         id,
 	})
+	if status == "succeeded" && job.Type == string(jobs.TypeDeployFrappeApp) {
+		s.recordFrappeDeployPoint(r.Context(), job, req.Result)
+		// If this deploy is a pipeline promotion, advance the env's commit.
+		if job.DeployID.Valid {
+			if dep, err := s.db.ReadQ.GetDeploy(r.Context(), job.DeployID.Int64); err == nil && dep.Kind == "pipeline_promote" {
+				s.recordPipelinePromotion(r.Context(), dep.ID, dep.CommitSha.String)
+			}
+		}
+	}
 	s.publishStatus(id, status)
 	s.bus.Publish(events.Event{JobID: id, Kind: events.KindDone})
 	w.WriteHeader(http.StatusOK)
+}
+
+// frappeDeployResult mirrors the agent's DeployFrappeResult (op_frappe.go).
+type frappeDeployResult struct {
+	App        string            `json:"app"`
+	Commit     string            `json:"commit"`
+	PrevCommit string            `json:"prev_commit"`
+	Backups    map[string]string `json:"backups"`
+}
+
+// recordFrappeDeployPoint persists the rollback point (previous commit +
+// pre-deploy backups) and updates frappe_apps commits after a successful
+// deploy_frappe_app job. Best-effort: failures are logged, not fatal.
+func (s *Server) recordFrappeDeployPoint(ctx context.Context, job store.Job, raw []byte) {
+	if len(raw) == 0 || !job.DeployID.Valid {
+		return
+	}
+	var res frappeDeployResult
+	if err := json.Unmarshal(raw, &res); err != nil || res.App == "" {
+		return
+	}
+	dep, err := s.db.ReadQ.GetDeploy(ctx, job.DeployID.Int64)
+	if err != nil || dep.TargetType != "bench" {
+		return
+	}
+	benchID := dep.TargetID
+
+	// A rollback point needs a known previous commit; skip if unavailable.
+	if res.PrevCommit != "" {
+		backupsJSON, _ := json.Marshal(res.Backups)
+		if err := s.db.WriteQ.UpsertDeployPoint(ctx, store.UpsertDeployPointParams{
+			BenchID: benchID, AppName: res.App,
+			PrevCommit: res.PrevCommit, BackupsJson: string(backupsJSON),
+		}); err != nil {
+			s.log.Warn("record deploy point", "err", err, "bench", benchID, "app", res.App)
+		}
+	}
+	// Track current/previous commit on the app row for display.
+	_ = s.db.WriteQ.SetFrappeAppCommits(ctx, store.SetFrappeAppCommitsParams{
+		PreviousCommit: nullStr(res.PrevCommit),
+		CurrentCommit:  nullStr(res.Commit),
+		BenchID:        benchID, AppName: res.App,
+	})
 }
 
 func (s *Server) publishStatus(jobID int64, status string) {

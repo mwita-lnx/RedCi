@@ -30,6 +30,7 @@ type NewSiteParams struct {
 	Domain         string    `json:"domain"`
 	Apps           []string  `json:"apps"`
 	AdminPassword  SecretRef `json:"admin_password"`
+	DBRootUser     string    `json:"db_root_user"`
 	DBRootPassword SecretRef `json:"db_root_password"`
 	WithSSL        bool      `json:"with_ssl"`
 }
@@ -56,6 +57,37 @@ func (p NewSiteParams) Validate(roots []string) error {
 		return fmt.Errorf("new_site: db_root_password missing")
 	}
 	return nil
+}
+
+// DeleteSiteParams drives `delete_site`.
+type DeleteSiteParams struct {
+	BenchPath      string    `json:"bench_path"`
+	Domain         string    `json:"domain"`
+	DBRootUser     string    `json:"db_root_user"`
+	DBRootPassword SecretRef `json:"db_root_password"`
+}
+
+func (p DeleteSiteParams) Validate(roots []string) error {
+	if err := ValidatePathUnder(p.BenchPath, roots); err != nil {
+		return err
+	}
+	if p.DBRootPassword == "" {
+		return fmt.Errorf("delete_site: db_root_password missing")
+	}
+	return ValidateDomain(p.Domain)
+}
+
+// SetupNginxParams drives `setup_nginx` — runs bench setup nginx + nginx -t + reload.
+type SetupNginxParams struct {
+	BenchPath string `json:"bench_path"`
+	Domain    string `json:"domain"`
+}
+
+func (p SetupNginxParams) Validate(roots []string) error {
+	if err := ValidatePathUnder(p.BenchPath, roots); err != nil {
+		return err
+	}
+	return ValidateDomain(p.Domain)
 }
 
 // InstallAppParams drives `install_app`.

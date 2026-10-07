@@ -43,16 +43,8 @@ func (s *Server) handleLoginPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Password OK. If the user has not enrolled in TOTP yet, log them in now
-	// and let requireLogin force enrollment on the next page.
-	if !s.auth.HasTOTP(user) {
-		s.completeLogin(w, r, user)
-		return
-	}
-
-	// Otherwise stash a pending-TOTP marker and ask for the code.
-	s.sessions.Put(r.Context(), sessPendingTOTP, user.ID)
-	http.Redirect(w, r, "/login/totp", http.StatusSeeOther)
+	// 2FA paused — log in directly regardless of TOTP enrollment status.
+	s.completeLogin(w, r, user)
 }
 
 func (s *Server) handleTOTPForm(w http.ResponseWriter, r *http.Request) {

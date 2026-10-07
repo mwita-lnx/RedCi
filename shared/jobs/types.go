@@ -18,11 +18,14 @@ const (
 	TypeGetFrappeApp     Type = "get_frappe_app"
 	TypeDeployFrappeApp  Type = "deploy_frappe_app"
 	TypeBackupSite       Type = "backup_site"
+	TypeSetupNginx       Type = "setup_nginx"
+	TypeDeleteSite       Type = "delete_site"
 	TypeIssueCertificate Type = "issue_certificate"
 	TypeWriteProxyRoute  Type = "write_proxy_route"
 	TypeDeleteProxyRoute Type = "delete_proxy_route"
-	TypeDeployWebApp     Type = "deploy_web_app"
-	TypeRollbackWebApp   Type = "rollback_web_app"
+	TypeDeployWebApp       Type = "deploy_web_app"
+	TypeRollbackWebApp     Type = "rollback_web_app"
+	TypeRollbackFrappeApp  Type = "rollback_frappe_app"
 )
 
 // Spec describes a job type's static properties: its default timeout, whether
@@ -43,11 +46,14 @@ var registry = map[Type]Spec{
 	TypeGetFrappeApp:     {TypeGetFrappeApp, 20 * time.Minute, false, 1},
 	TypeDeployFrappeApp:  {TypeDeployFrappeApp, 45 * time.Minute, false, 1},
 	TypeBackupSite:       {TypeBackupSite, 30 * time.Minute, false, 1},
+	TypeSetupNginx:       {TypeSetupNginx, 5 * time.Minute, false, 1},
+	TypeDeleteSite:       {TypeDeleteSite, 10 * time.Minute, false, 1},
 	TypeIssueCertificate: {TypeIssueCertificate, 5 * time.Minute, true, 2},
 	TypeWriteProxyRoute:  {TypeWriteProxyRoute, 2 * time.Minute, false, 1},
 	TypeDeleteProxyRoute: {TypeDeleteProxyRoute, 2 * time.Minute, false, 1},
-	TypeDeployWebApp:     {TypeDeployWebApp, 20 * time.Minute, false, 1},
-	TypeRollbackWebApp:   {TypeRollbackWebApp, 5 * time.Minute, false, 1},
+	TypeDeployWebApp:      {TypeDeployWebApp, 20 * time.Minute, false, 1},
+	TypeRollbackWebApp:    {TypeRollbackWebApp, 5 * time.Minute, false, 1},
+	TypeRollbackFrappeApp: {TypeRollbackFrappeApp, 45 * time.Minute, false, 1},
 }
 
 // Lookup returns the Spec for a job type.
@@ -74,6 +80,10 @@ func newParams(t Type) (Params, error) {
 		return &NewSiteParams{}, nil
 	case TypeInstallApp:
 		return &InstallAppParams{}, nil
+	case TypeSetupNginx:
+		return &SetupNginxParams{}, nil
+	case TypeDeleteSite:
+		return &DeleteSiteParams{}, nil
 	case TypeIssueCertificate:
 		return &IssueCertificateParams{}, nil
 	case TypeGetFrappeApp:
@@ -90,6 +100,8 @@ func newParams(t Type) (Params, error) {
 		return &DeployWebAppParams{}, nil
 	case TypeRollbackWebApp:
 		return &RollbackWebAppParams{}, nil
+	case TypeRollbackFrappeApp:
+		return &RollbackFrappeAppParams{}, nil
 	default:
 		return nil, fmt.Errorf("unknown or not-yet-implemented job type %q", t)
 	}

@@ -36,6 +36,7 @@ type Bench struct {
 	Path          string         `json:"path"`
 	FrappeVersion sql.NullString `json:"frappe_version"`
 	CreatedAt     int64          `json:"created_at"`
+	FactsJson     string         `json:"facts_json"`
 }
 
 type Deploy struct {
@@ -52,11 +53,21 @@ type Deploy struct {
 }
 
 type FrappeApp struct {
-	ID            int64          `json:"id"`
-	BenchID       int64          `json:"bench_id"`
-	AppSourceID   sql.NullInt64  `json:"app_source_id"`
-	AppName       string         `json:"app_name"`
-	CurrentCommit sql.NullString `json:"current_commit"`
+	ID             int64          `json:"id"`
+	BenchID        int64          `json:"bench_id"`
+	AppSourceID    sql.NullInt64  `json:"app_source_id"`
+	AppName        string         `json:"app_name"`
+	CurrentCommit  sql.NullString `json:"current_commit"`
+	PreviousCommit sql.NullString `json:"previous_commit"`
+}
+
+type FrappeDeployPoint struct {
+	ID          int64  `json:"id"`
+	BenchID     int64  `json:"bench_id"`
+	AppName     string `json:"app_name"`
+	PrevCommit  string `json:"prev_commit"`
+	BackupsJson string `json:"backups_json"`
+	CreatedAt   int64  `json:"created_at"`
 }
 
 type Job struct {
@@ -93,6 +104,24 @@ type LoginAttempt struct {
 	ID  int64  `json:"id"`
 	Key string `json:"key"`
 	Ts  int64  `json:"ts"`
+}
+
+type Pipeline struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	AppSourceID int64  `json:"app_source_id"`
+	CreatedAt   int64  `json:"created_at"`
+}
+
+type PipelineEnv struct {
+	ID              int64          `json:"id"`
+	PipelineID      int64          `json:"pipeline_id"`
+	Name            string         `json:"name"`
+	Rank            int64          `json:"rank"`
+	SiteID          int64          `json:"site_id"`
+	RequireApproval int64          `json:"require_approval"`
+	CurrentCommit   sql.NullString `json:"current_commit"`
+	LastDeployID    sql.NullInt64  `json:"last_deploy_id"`
 }
 
 type ProxyRoute struct {

@@ -10,6 +10,7 @@ import (
 )
 
 type Querier interface {
+	ArchiveSite(ctx context.Context, id int64) error
 	BenchesWithApp(ctx context.Context, appSourceID sql.NullInt64) ([]Bench, error)
 	CancelJobsRequested(ctx context.Context) error
 	// Job dispatch ---------------------------------------------------------------
@@ -34,6 +35,9 @@ type Querier interface {
 	CreateDeploy(ctx context.Context, arg CreateDeployParams) (Deploy, error)
 	CreateFrappeApp(ctx context.Context, arg CreateFrappeAppParams) (FrappeApp, error)
 	CreateJob(ctx context.Context, arg CreateJobParams) (Job, error)
+	// Pipelines (dev -> staging -> prod release trains) -------------------------
+	CreatePipeline(ctx context.Context, arg CreatePipelineParams) (Pipeline, error)
+	CreatePipelineEnv(ctx context.Context, arg CreatePipelineEnvParams) (PipelineEnv, error)
 	// Proxy routes ---------------------------------------------------------------
 	CreateProxyRoute(ctx context.Context, arg CreateProxyRouteParams) (ProxyRoute, error)
 	// Server enrollment and heartbeat -------------------------------------------
@@ -42,7 +46,10 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	// Web apps -------------------------------------------------------------------
 	CreateWebApp(ctx context.Context, arg CreateWebAppParams) (WebApp, error)
+	DeletePipeline(ctx context.Context, id int64) error
+	DeletePipelineEnvs(ctx context.Context, pipelineID int64) error
 	DeleteSecret(ctx context.Context, name string) error
+	DeleteSiteRow(ctx context.Context, id int64) error
 	EarlierSiblingsSucceeded(ctx context.Context, arg EarlierSiblingsSucceededParams) (int64, error)
 	// Worker passes --------------------------------------------------------------
 	ExpireLeases(ctx context.Context, leaseExpiresAt sql.NullInt64) ([]ExpireLeasesRow, error)
@@ -52,9 +59,14 @@ type Querier interface {
 	FinishDeploy(ctx context.Context, arg FinishDeployParams) error
 	FinishJob(ctx context.Context, arg FinishJobParams) error
 	GetAppSource(ctx context.Context, id int64) (AppSource, error)
+	GetAppSourceByName(ctx context.Context, name string) (AppSource, error)
 	GetBench(ctx context.Context, id int64) (Bench, error)
 	GetDeploy(ctx context.Context, id int64) (Deploy, error)
+	GetDeployPoint(ctx context.Context, arg GetDeployPointParams) (FrappeDeployPoint, error)
 	GetJob(ctx context.Context, id int64) (Job, error)
+	GetPipeline(ctx context.Context, id int64) (Pipeline, error)
+	GetPipelineEnvByDeploy(ctx context.Context, lastDeployID sql.NullInt64) (PipelineEnv, error)
+	GetPipelineEnvByRank(ctx context.Context, arg GetPipelineEnvByRankParams) (PipelineEnv, error)
 	GetProxyRoute(ctx context.Context, id int64) (ProxyRoute, error)
 	GetSecret(ctx context.Context, name string) ([]byte, error)
 	GetServerByID(ctx context.Context, id int64) (Server, error)
@@ -75,9 +87,13 @@ type Querier interface {
 	ListBenches(ctx context.Context) ([]Bench, error)
 	ListBenchesForServer(ctx context.Context, serverID int64) ([]Bench, error)
 	ListCancelRequestedForServer(ctx context.Context, serverID int64) ([]int64, error)
+	// Envs joined to their site + bench + server so the API can show which agent
+	// each environment runs on, its domain, and its deploy status.
+	ListEnvsForPipeline(ctx context.Context, pipelineID int64) ([]ListEnvsForPipelineRow, error)
 	ListFrappeAppsForBench(ctx context.Context, benchID int64) ([]FrappeApp, error)
 	ListJobLogs(ctx context.Context, arg ListJobLogsParams) ([]JobLog, error)
 	ListJobsForDeploy(ctx context.Context, deployID sql.NullInt64) ([]Job, error)
+	ListPipelines(ctx context.Context) ([]Pipeline, error)
 	ListProxyRoutes(ctx context.Context) ([]ProxyRoute, error)
 	ListProxyRoutesForServer(ctx context.Context, serverID int64) ([]ProxyRoute, error)
 	ListRecentDeploys(ctx context.Context, limit int64) ([]ListRecentDeploysRow, error)
@@ -97,8 +113,12 @@ type Querier interface {
 	RenewLease(ctx context.Context, id int64) error
 	RouteOrSiteExistsForDomain(ctx context.Context, arg RouteOrSiteExistsForDomainParams) (int64, error)
 	SetAppSourceAutoDeploy(ctx context.Context, arg SetAppSourceAutoDeployParams) error
+	SetBenchFacts(ctx context.Context, arg SetBenchFactsParams) error
 	SetDeployRunning(ctx context.Context, id int64) error
+	SetEnvCommit(ctx context.Context, arg SetEnvCommitParams) error
+	SetEnvDeploy(ctx context.Context, arg SetEnvDeployParams) error
 	SetFrappeAppCommit(ctx context.Context, arg SetFrappeAppCommitParams) error
+	SetFrappeAppCommits(ctx context.Context, arg SetFrappeAppCommitsParams) error
 	SetProxyRouteApplied(ctx context.Context, arg SetProxyRouteAppliedParams) error
 	SetProxyRouteStatus(ctx context.Context, arg SetProxyRouteStatusParams) error
 	SetSiteSSL(ctx context.Context, arg SetSiteSSLParams) error
@@ -111,6 +131,8 @@ type Querier interface {
 	SitesForBench(ctx context.Context, benchID int64) ([]Site, error)
 	StartJob(ctx context.Context, id int64) error
 	TouchUserLogin(ctx context.Context, id int64) error
+	UpdateSiteApps(ctx context.Context, arg UpdateSiteAppsParams) error
+	UpsertDeployPoint(ctx context.Context, arg UpsertDeployPointParams) error
 	WebAppsForSource(ctx context.Context, appSourceID int64) ([]WebApp, error)
 }
 

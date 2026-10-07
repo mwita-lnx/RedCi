@@ -11,11 +11,14 @@ import (
 
 // discoveredBench mirrors the agent's server_status result shape.
 type discoveredBench struct {
-	Path  string `json:"path"`
-	Apps  []string `json:"apps"`
-	Sites []struct {
-		Domain string `json:"domain"`
-		HasSSL bool   `json:"has_ssl"`
+	Path        string            `json:"path"`
+	Apps        []string          `json:"apps"`
+	AppVersions map[string]string `json:"app_versions,omitempty"`
+	Facts       json.RawMessage   `json:"facts,omitempty"`
+	Sites       []struct {
+		Domain        string   `json:"domain"`
+		HasSSL        bool     `json:"has_ssl"`
+		InstalledApps []string `json:"installed_apps"`
 	} `json:"sites"`
 }
 
@@ -71,23 +74,51 @@ func (s *Server) ImportDiscovered(ctx context.Context, serverID int64) (benches,
 			}
 			benchID = created.ID
 			benches++
-			// Record its apps.
-			for _, app := range db.Apps {
-				_, _ = s.db.WriteQ.CreateFrappeApp(ctx, store.CreateFrappeAppParams{
-					BenchID: benchID, AppName: app,
+		}
+		// Ensure app rows exist (also for benches imported earlier without them).
+		for _, app := range db.Apps {
+			_, _ = s.db.WriteQ.CreateFrappeApp(ctx, store.CreateFrappeAppParams{
+				BenchID: benchID, AppName: app,
+			})
+		}
+		// Store the bench's runtime facts + frappe version.
+		factsJSON := "{}"
+		if len(db.Facts) > 0 {
+			factsJSON = string(db.Facts)
+		}
+		_ = s.db.WriteQ.SetBenchFacts(ctx, store.SetBenchFactsParams{
+			FactsJson: factsJSON, FrappeVersion: nullStr(res.BenchVersion), ID: benchID,
+		})
+		// Update app versions from what the agent read off disk.
+		for app, ver := range db.AppVersions {
+			if ver != "" {
+				_ = s.db.WriteQ.SetFrappeAppCommit(ctx, store.SetFrappeAppCommitParams{
+					BenchID: benchID, AppName: app, CurrentCommit: nullStr(ver),
 				})
 			}
 		}
 		// Import sites not already present.
 		for _, site := range db.Sites {
-			if _, err := s.db.ReadQ.GetSiteByDomain(ctx, site.Domain); err == nil {
-				continue // already known
+			if existing, err := s.db.ReadQ.GetSiteByDomain(ctx, site.Domain); err == nil {
+				// Update apps_json if it was previously empty.
+				if existing.AppsJson == "[]" && len(site.InstalledApps) > 0 {
+					appsJSON, _ := json.Marshal(site.InstalledApps)
+					_ = s.db.WriteQ.UpdateSiteApps(ctx, store.UpdateSiteAppsParams{
+						AppsJson: string(appsJSON), ID: existing.ID,
+					})
+				}
+				continue
+			}
+			appsJSON := "[]"
+			if len(site.InstalledApps) > 0 {
+				b, _ := json.Marshal(site.InstalledApps)
+				appsJSON = string(b)
 			}
 			if _, err := s.db.WriteQ.CreateSite(ctx, store.CreateSiteParams{
 				BenchID:    benchID,
 				Domain:     site.Domain,
 				Status:     "active",
-				AppsJson:   "[]",
+				AppsJson:   appsJSON,
 				SslEnabled: boolToInt(site.HasSSL),
 			}); err != nil {
 				return benches, sites, err

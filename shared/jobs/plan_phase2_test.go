@@ -5,7 +5,11 @@ import (
 	"testing"
 )
 
-func TestDeployFrappeAppSteps(t *testing.T) {
+// deploy_frappe_app and rollback_frappe_app run as agent custom ops now, so the
+// step sequence is tested there. Here we cover the param validation and the
+// shared clone-token env helper (the security-relevant invariant: the token
+// rides in GIT_CONFIG, base64-wrapped, never as plaintext in argv or env).
+func TestDeployFrappeAppValidate(t *testing.T) {
 	p := DeployFrappeAppParams{
 		BenchPath: "/home/frappe/frappe-bench", App: "erpnext", Branch: "main",
 		Commit: "0123456789abcdef0123456789abcdef01234567",
@@ -15,48 +19,35 @@ func TestDeployFrappeAppSteps(t *testing.T) {
 	if err := p.Validate([]string{"/home/frappe/frappe-bench"}); err != nil {
 		t.Fatal(err)
 	}
-	steps, err := p.Steps(PlanContext{Secrets: map[SecretRef]string{"secret:clone:1": "TOK"}})
-	if err != nil {
+	// Rollback params validate on the same bench rules.
+	r := RollbackFrappeAppParams{
+		BenchPath: "/home/frappe/frappe-bench", App: "erpnext", Branch: "main",
+		Commit: "0123456789abcdef0123456789abcdef01234567",
+		Sites:  []string{"a.example.com"},
+		Backups: map[string]string{"a.example.com": "/x/backups/db.sql.gz"},
+	}
+	if err := r.Validate([]string{"/home/frappe/frappe-bench"}); err != nil {
 		t.Fatal(err)
 	}
-	// 2 backups + fetch + checkout + pip + yarn + 2 maint-on + 2 migrate + build + restart + 2 maint-off = 14
-	if len(steps) != 14 {
-		t.Fatalf("got %d steps, want 14", len(steps))
+}
+
+func TestGitTokenEnv(t *testing.T) {
+	// No token: no env.
+	if env := gitTokenEnv(""); env != nil {
+		t.Fatalf("empty token should yield nil env, got %v", env)
 	}
-	// Maintenance-off steps must be AlwaysRun (deferred cleanup).
-	var offCount int
-	for _, s := range steps {
-		if strings.HasPrefix(s.Name, "maintenance off") {
-			offCount++
-			if !s.AlwaysRun {
-				t.Errorf("step %q should be AlwaysRun", s.Name)
-			}
+	env := gitTokenEnv("TOK")
+	var sawCount bool
+	for _, e := range env {
+		if strings.HasPrefix(e, "GIT_CONFIG_COUNT=") {
+			sawCount = true
 		}
-		// Token must never be in argv.
-		for _, a := range s.Args {
-			if strings.Contains(a, "TOK") {
-				t.Errorf("clone token leaked into argv of %q", s.Name)
-			}
+		if strings.Contains(e, "TOK") {
+			t.Errorf("plaintext token leaked into env: %q", e)
 		}
 	}
-	if offCount != 2 {
-		t.Fatalf("expected 2 maintenance-off steps, got %d", offCount)
-	}
-	// Fetch step carries the token via GIT_CONFIG env (base64-wrapped), never
-	// as plaintext in argv or env.
-	var sawGitConfig bool
-	for _, s := range steps {
-		for _, e := range s.Env {
-			if strings.HasPrefix(e, "GIT_CONFIG_COUNT=") {
-				sawGitConfig = true
-			}
-			if strings.Contains(e, "TOK") {
-				t.Errorf("plaintext token leaked into env: %q", e)
-			}
-		}
-	}
-	if !sawGitConfig {
-		t.Error("expected GIT_CONFIG env on the fetch step")
+	if !sawCount {
+		t.Error("expected GIT_CONFIG_COUNT in token env")
 	}
 }
 

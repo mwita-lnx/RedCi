@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/mwita-lnx/RedCi/ops/internal/auth"
@@ -94,13 +95,16 @@ func (s *Server) requireLogin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := s.currentUser(r.Context())
 		if !ok {
+			// API clients get a clean 401 to redirect themselves; page
+			// requests get a browser redirect to the login screen.
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		if !s.auth.HasTOTP(user) && r.URL.Path != "/enroll-totp" && r.URL.Path != "/enroll-totp/qr" {
-			http.Redirect(w, r, "/enroll-totp", http.StatusSeeOther)
-			return
-		}
+		// 2FA enrollment enforcement paused.
 		next(w, r.WithContext(withUser(r.Context(), user)))
 	}
 }

@@ -113,8 +113,10 @@ func TestEnrollClaimRunReport(t *testing.T) {
 	if !sawStep {
 		t.Errorf("expected a 'create site' step marker; got %d lines: %v", len(lines), lines)
 	}
-	if len(lines) != 10 {
-		t.Errorf("expected 10 log lines (5 markers + 5 dry-run), got %d", len(lines))
+	// new_site is now 2 steps (create site + install one app); dry-run emits a
+	// step marker and a dry-run line per step = 4 lines.
+	if len(lines) != 4 {
+		t.Errorf("expected 4 log lines (2 markers + 2 dry-run), got %d: %v", len(lines), lines)
 	}
 	if sawSecret {
 		t.Error("plaintext secret leaked into logs")

@@ -56,6 +56,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /sites/new", s.requireRole(auth.RoleAdmin, s.handleNewSiteForm))
 	s.mux.HandleFunc("POST /sites/new", s.requireRole(auth.RoleAdmin, s.handleNewSiteSubmit))
 	s.mux.HandleFunc("POST /sites/{id}/backup", s.requireRole(auth.RoleDeployer, s.handleSiteBackup))
+	s.mux.HandleFunc("POST /sites/{id}/refresh", s.requireRole(auth.RoleAdmin, s.handleSiteRefresh))
+	s.mux.HandleFunc("GET /sites/{id}", s.requireRole(auth.RoleViewer, s.handleSiteDetail))
+	s.mux.HandleFunc("POST /sites/{id}/delete", s.requireRole(auth.RoleAdmin, s.handleSiteDelete))
+	s.mux.HandleFunc("POST /sites/{id}/apps/{app}/rollback", s.requireRole(auth.RoleDeployer, s.handleSiteAppRollback))
 
 	// App sources, web apps, routes.
 	s.mux.HandleFunc("GET /app-sources", s.requireRole(auth.RoleViewer, s.handleAppSources))
@@ -77,6 +81,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /agent/v1/jobs/{id}/start", s.requireAgent(s.handleAgentJobStart))
 	s.mux.HandleFunc("POST /agent/v1/jobs/{id}/logs", s.requireAgent(s.handleAgentJobLogs))
 	s.mux.HandleFunc("POST /agent/v1/jobs/{id}/result", s.requireAgent(s.handleAgentJobResult))
+
+	// JSON API for the React SPA (session-auth, same-origin CSRF).
+	s.registerAPIRoutes()
+
+	// React SPA (served under /app/, client-side routed). Requires login; the
+	// SPA's own API calls enforce per-action roles.
+	s.mux.HandleFunc("GET /app/", s.requireLogin(s.handleSPA))
 }
 
 // csrfProtect wraps the handler with filippo.io/csrf, which rejects non-safe

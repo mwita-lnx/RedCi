@@ -90,6 +90,74 @@ templ ServerAdd(user store.User, enrollCmd, errMsg string) {
 
 // --- Sites ---
 
+templ SiteDetail(user store.User, site store.Site, versions map[string]string, rollbackable map[string]bool) {
+	@Base(site.Domain, "/sites", userFromStore(user)) {
+		<header class="page-header">
+			<div>
+				<h1>{ site.Domain }</h1>
+				<p class="sub">{ site.Status } · SSL { sslLabel(site.SslEnabled) }</p>
+			</div>
+		</header>
+		<section class="panel-box">
+			<h2>Installed apps</h2>
+			if len(versions) == 0 {
+				<p class="sub">No apps recorded.</p>
+			} else {
+				<table>
+					<thead><tr><th>App</th><th>Version</th><th></th></tr></thead>
+					<tbody>
+						for app, ver := range versions {
+							<tr>
+								<td>{ app }</td>
+								<td>
+									if ver != "" {
+										{ ver }
+									} else {
+										<span style="color:#5B616E">unknown</span>
+									}
+								</td>
+								<td style="text-align:right">
+									if rollbackable[app] {
+										<form method="post" action={ templ.SafeURL("/sites/" + i64(site.ID) + "/apps/" + app + "/rollback") } style="display:inline"
+											onsubmit="return confirm('Roll back this app to the previous commit and restore the pre-deploy database? Data written since the last deploy will be lost.')">
+											<button class="btn secondary" style="height:32px;padding:0 12px" type="submit">Roll back</button>
+										</form>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</section>
+		<section class="panel-box" style="max-width:480px">
+			<h2>Actions</h2>
+			<div style="display:flex;gap:10px;flex-wrap:wrap">
+				<form method="post" action={ templ.SafeURL("/sites/" + i64(site.ID) + "/refresh") }>
+					<button class="btn secondary" type="submit">Refresh</button>
+				</form>
+				<form method="post" action={ templ.SafeURL("/sites/" + i64(site.ID) + "/backup") }>
+					<button class="btn secondary" type="submit">Backup</button>
+				</form>
+				<button class="btn danger" type="button" onclick="document.getElementById('dlg-delete').showModal()">Delete site</button>
+			</div>
+		</section>
+		<dialog id="dlg-delete" style="border:1px solid var(--border);border-radius:12px;padding:28px;width:100%;max-width:420px;box-shadow:0 8px 32px rgba(0,0,0,.12)">
+			<h2 style="margin-bottom:6px">Delete { site.Domain }?</h2>
+			<p class="sub" style="margin-bottom:18px">Drops the site database and removes it from nginx. This cannot be undone.</p>
+			<form method="post" action={ templ.SafeURL("/sites/" + i64(site.ID) + "/delete") }
+				style="display:flex;flex-direction:column;gap:12px">
+				<label class="field">DB root user<input type="text" name="db_root_user" value="root" required/></label>
+				<label class="field">DB root password<input type="password" name="db_root_password" required autofocus/></label>
+				<div style="display:flex;gap:10px;margin-top:4px">
+					<button class="btn danger" type="submit" style="flex:1;justify-content:center">Confirm delete</button>
+					<button class="btn secondary" type="button" style="flex:1;justify-content:center" onclick="document.getElementById('dlg-delete').close()">Cancel</button>
+				</div>
+			</form>
+		</dialog>
+	}
+}
+
 templ Sites(user store.User, sites []store.Site) {
 	@Base("Sites", "/sites", userFromStore(user)) {
 		<header class="page-header">
@@ -104,16 +172,19 @@ templ Sites(user store.User, sites []store.Site) {
 						<tr><td colspan="4" style="color:#5B616E">No sites yet.</td></tr>
 					}
 					for _, st := range sites {
-						<tr>
-							<td>{ st.Domain }</td>
-							<td>@statusBadge(st.Status)</td>
-							<td>{ sslLabel(st.SslEnabled) }</td>
-							<td>
-								<form method="post" action={ templ.SafeURL("/sites/" + i64(st.ID) + "/backup") } style="display:inline">
-									<button class="btn secondary" style="height:32px;padding:0 12px">Backup</button>
-								</form>
-							</td>
-						</tr>
+						if st.Status != "archived" {
+							<tr>
+								<td><a href={ templ.SafeURL("/sites/" + i64(st.ID)) }>{ st.Domain }</a></td>
+								<td>@statusBadge(st.Status)</td>
+								<td>{ sslLabel(st.SslEnabled) }</td>
+								<td>
+									<form method="post" action={ templ.SafeURL("/sites/" + i64(st.ID) + "/backup") } style="display:inline">
+										<button class="btn secondary" style="height:32px;padding:0 12px">Backup</button>
+									</form>
+									<a href={ templ.SafeURL("/sites/" + i64(st.ID)) } class="btn secondary" style="height:32px;padding:0 12px">View</a>
+								</td>
+							</tr>
+						}
 					}
 				</tbody>
 			</table>
@@ -149,6 +220,7 @@ templ NewSite(user store.User, benches []store.Bench, errMsg string) {
 					<label class="field">Domain<input type="text" name="domain" required placeholder="client1.example.com"/></label>
 					<label class="field">Apps (comma or space separated)<input type="text" name="apps" required placeholder="erpnext hrms"/></label>
 					<label class="field">Admin password<input type="password" name="admin_password" required/></label>
+					<label class="field">DB root user<input type="text" name="db_root_user" value="root" required/></label>
 					<label class="field">DB root password<input type="password" name="db_root_password" required/></label>
 					<label class="field">Let's Encrypt email (for SSL)<input type="email" name="le_email" placeholder="ops@example.com"/></label>
 					<label style="display:flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" name="ssl"/> Enable SSL</label>

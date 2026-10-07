@@ -12,7 +12,7 @@ import (
 // CreateSiteDeploy stores the site's secrets, creates the site row, and builds
 // a deploy: new_site, then issue_certificate when SSL is requested. Returns the
 // deploy id.
-func (s *Server) CreateSiteDeploy(ctx context.Context, benchID int64, domain string, apps []string, adminPassword, dbRootPassword, leEmail string, ssl bool, userID int64) (int64, error) {
+func (s *Server) CreateSiteDeploy(ctx context.Context, benchID int64, domain string, apps []string, adminPassword, dbRootUser, dbRootPassword, leEmail string, ssl bool, userID int64) (int64, error) {
 	bench, err := s.db.ReadQ.GetBench(ctx, benchID)
 	if err != nil {
 		return 0, fmt.Errorf("bench %d: %w", benchID, err)
@@ -47,11 +47,15 @@ func (s *Server) CreateSiteDeploy(ctx context.Context, benchID int64, domain str
 		Domain:         domain,
 		Apps:           apps,
 		AdminPassword:  jobs.SecretRef("secret:" + siteAdminSecretName(site.ID)),
+		DBRootUser:     dbRootUser,
 		DBRootPassword: jobs.SecretRef("secret:" + dbRootSecretName(benchID)),
 		WithSSL:        ssl,
 	}
 	seeds := []jobSeed{
 		{serverID: bench.ServerID, typ: jobs.TypeNewSite, params: newSite, lockKey: benchLock(benchID)},
+		{serverID: bench.ServerID, typ: jobs.TypeSetupNginx, params: jobs.SetupNginxParams{
+			BenchPath: bench.Path, Domain: domain,
+		}, lockKey: nginxLock(bench.ServerID)},
 	}
 	if ssl {
 		seeds = append(seeds, jobSeed{
@@ -72,6 +76,40 @@ func (s *Server) CreateSiteDeploy(ctx context.Context, benchID int64, domain str
 	return depID, nil
 }
 
+// DeleteSite marks the site as archived, enqueues a delete_site job, and
+// removes the site row after the job succeeds (handled by finishDeploys).
+func (s *Server) DeleteSite(ctx context.Context, siteID int64, dbRootUser, dbRootPassword string, userID int64) (int64, error) {
+	site, err := s.db.ReadQ.GetSite(ctx, siteID)
+	if err != nil {
+		return 0, fmt.Errorf("site %d: %w", siteID, err)
+	}
+	bench, err := s.db.ReadQ.GetBench(ctx, site.BenchID)
+	if err != nil {
+		return 0, fmt.Errorf("bench %d: %w", site.BenchID, err)
+	}
+	secretName := dbRootSecretName(bench.ID)
+	if err := s.putSecret(ctx, secretName, dbRootPassword); err != nil {
+		return 0, fmt.Errorf("store secret: %w", err)
+	}
+	if err := s.db.WriteQ.ArchiveSite(ctx, siteID); err != nil {
+		return 0, err
+	}
+	params := jobs.DeleteSiteParams{
+		BenchPath:      bench.Path,
+		Domain:         site.Domain,
+		DBRootUser:     dbRootUser,
+		DBRootPassword: jobs.SecretRef("secret:" + secretName),
+	}
+	depID, err := s.createDeploy(ctx, "site_delete", "site", siteID, "ui", "", userID, []jobSeed{
+		{serverID: bench.ServerID, typ: jobs.TypeDeleteSite, params: params, lockKey: benchLock(bench.ID)},
+	})
+	if err != nil {
+		return 0, err
+	}
+	s.nudge()
+	return depID, nil
+}
+
 // BackupSite builds a one-job backup deploy.
 func (s *Server) BackupSite(ctx context.Context, siteID int64, withFiles bool, userID int64) (int64, error) {
 	site, err := s.db.ReadQ.GetSite(ctx, siteID)
@@ -85,6 +123,63 @@ func (s *Server) BackupSite(ctx context.Context, siteID int64, withFiles bool, u
 	params := jobs.BackupSiteParams{BenchPath: bench.Path, Site: site.Domain, WithFiles: withFiles}
 	depID, err := s.createDeploy(ctx, "backup", "site", site.ID, "ui", "", userID, []jobSeed{
 		{serverID: bench.ServerID, typ: jobs.TypeBackupSite, params: params, lockKey: benchLock(bench.ID)},
+	})
+	if err != nil {
+		return 0, err
+	}
+	s.nudge()
+	return depID, nil
+}
+
+// RollbackFrappeApp reverts an app on a bench to its last-recorded deploy point:
+// checks out the previous commit and restores the pre-deploy database backups.
+// Requires a deploy point recorded by a prior successful deploy.
+func (s *Server) RollbackFrappeApp(ctx context.Context, benchID int64, appName string, userID int64) (int64, error) {
+	bench, err := s.db.ReadQ.GetBench(ctx, benchID)
+	if err != nil {
+		return 0, fmt.Errorf("bench %d: %w", benchID, err)
+	}
+	dp, err := s.db.ReadQ.GetDeployPoint(ctx, store.GetDeployPointParams{
+		BenchID: benchID, AppName: appName,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("no rollback point recorded for %s on this bench", appName)
+	}
+	var backups map[string]string
+	_ = json.Unmarshal([]byte(dp.BackupsJson), &backups)
+
+	// Branch comes from the app source (match by name).
+	branch := "main"
+	if src, err := s.db.ReadQ.GetAppSourceByName(ctx, appName); err == nil {
+		branch = src.Branch
+	}
+
+	// Sites currently active on the bench with the app.
+	sites, err := s.db.ReadQ.SitesForBench(ctx, benchID)
+	if err != nil {
+		return 0, err
+	}
+	var domains []string
+	for _, st := range sites {
+		if st.Status == "active" {
+			domains = append(domains, st.Domain)
+		}
+	}
+	if len(domains) == 0 {
+		return 0, fmt.Errorf("no active sites on this bench to roll back")
+	}
+
+	params := jobs.RollbackFrappeAppParams{
+		BenchPath: bench.Path,
+		App:       appName,
+		Branch:    branch,
+		Commit:    dp.PrevCommit,
+		Sites:     domains,
+		Backups:   backups,
+		CloneTok:  jobs.SecretRef("secret:" + cloneTokenSecretName),
+	}
+	depID, err := s.createDeploy(ctx, "frappe_rollback", "bench", benchID, "ui", dp.PrevCommit, userID, []jobSeed{
+		{serverID: bench.ServerID, typ: jobs.TypeRollbackFrappeApp, params: params, lockKey: benchLock(benchID)},
 	})
 	if err != nil {
 		return 0, err

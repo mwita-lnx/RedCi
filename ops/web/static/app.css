@@ -92,6 +92,8 @@ tr:last-child td { border-bottom: 0; }
   border: 0; cursor: pointer; }
 .btn:hover { background: var(--brand-hover); color: #fff; }
 .btn.secondary { background: #fff; color: var(--text); border: 1px solid var(--border-input); }
+.btn.danger { background: #fff; color: #C8102E; border: 1px solid #C8102E; }
+.btn.danger:hover { background: #C8102E; color: #fff; }
 
 input[type=text], input[type=email], input[type=password], input[type=search], input[type=number] {
   height: 44px; width: 100%; padding: 0 14px; border: 1px solid var(--border-input);

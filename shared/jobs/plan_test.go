@@ -18,9 +18,10 @@ func TestNewSiteSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Expect: create + 2 installs + setup nginx + test + reload = 6 steps.
-	if len(steps) != 6 {
-		t.Fatalf("got %d steps, want 6", len(steps))
+	// nginx is a separate setup_nginx job now; new_site is create + N installs.
+	// Expect: create + 2 installs = 3 steps.
+	if len(steps) != 3 {
+		t.Fatalf("got %d steps, want 3", len(steps))
 	}
 	if steps[0].Command != "bench" || steps[0].Args[0] != "new-site" || steps[0].Args[1] != "client1.example.com" {
 		t.Fatalf("step 0 argv wrong: %v", steps[0].Args)

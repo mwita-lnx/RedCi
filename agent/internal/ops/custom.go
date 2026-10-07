@@ -28,7 +28,8 @@ func IsCustom(t jobs.Type) bool {
 	switch t {
 	case jobs.TypeServerStatus, jobs.TypeListNginxConfigs,
 		jobs.TypeWriteProxyRoute, jobs.TypeDeleteProxyRoute,
-		jobs.TypeDeployWebApp, jobs.TypeRollbackWebApp:
+		jobs.TypeDeployWebApp, jobs.TypeRollbackWebApp,
+		jobs.TypeDeployFrappeApp, jobs.TypeRollbackFrappeApp:
 		return true
 	}
 	return false
@@ -67,6 +68,10 @@ func RunCustom(ctx context.Context, env Env, job protocol.Job, log Log) Result {
 		return runDeployWebApp(ctx, env, job, log)
 	case jobs.TypeRollbackWebApp:
 		return runRollbackWebApp(ctx, env, job, log)
+	case jobs.TypeDeployFrappeApp:
+		return runDeployFrappeApp(ctx, env, job, log)
+	case jobs.TypeRollbackFrappeApp:
+		return runRollbackFrappeApp(ctx, env, job, log)
 	default:
 		return fail(errUnsupported(job.Type))
 	}

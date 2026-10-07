@@ -10,8 +10,17 @@ import (
 	"database/sql"
 )
 
+const archiveSite = `-- name: ArchiveSite :exec
+UPDATE sites SET status = 'archived' WHERE id = ?
+`
+
+func (q *Queries) ArchiveSite(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, archiveSite, id)
+	return err
+}
+
 const benchesWithApp = `-- name: BenchesWithApp :many
-SELECT b.id, b.server_id, b.name, b.path, b.frappe_version, b.created_at FROM benches b
+SELECT b.id, b.server_id, b.name, b.path, b.frappe_version, b.created_at, b.facts_json FROM benches b
 JOIN frappe_apps fa ON fa.bench_id = b.id
 WHERE fa.app_source_id = ?
 `
@@ -32,6 +41,7 @@ func (q *Queries) BenchesWithApp(ctx context.Context, appSourceID sql.NullInt64)
 			&i.Path,
 			&i.FrappeVersion,
 			&i.CreatedAt,
+			&i.FactsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -86,7 +96,7 @@ const createBench = `-- name: CreateBench :one
 
 INSERT INTO benches (server_id, name, path, frappe_version)
 VALUES (?, ?, ?, ?)
-RETURNING id, server_id, name, path, frappe_version, created_at
+RETURNING id, server_id, name, path, frappe_version, created_at, facts_json
 `
 
 type CreateBenchParams struct {
@@ -112,6 +122,7 @@ func (q *Queries) CreateBench(ctx context.Context, arg CreateBenchParams) (Bench
 		&i.Path,
 		&i.FrappeVersion,
 		&i.CreatedAt,
+		&i.FactsJson,
 	)
 	return i, err
 }
@@ -119,7 +130,7 @@ func (q *Queries) CreateBench(ctx context.Context, arg CreateBenchParams) (Bench
 const createFrappeApp = `-- name: CreateFrappeApp :one
 INSERT INTO frappe_apps (bench_id, app_source_id, app_name, current_commit)
 VALUES (?, ?, ?, ?)
-RETURNING id, bench_id, app_source_id, app_name, current_commit
+RETURNING id, bench_id, app_source_id, app_name, current_commit, previous_commit
 `
 
 type CreateFrappeAppParams struct {
@@ -143,6 +154,7 @@ func (q *Queries) CreateFrappeApp(ctx context.Context, arg CreateFrappeAppParams
 		&i.AppSourceID,
 		&i.AppName,
 		&i.CurrentCommit,
+		&i.PreviousCommit,
 	)
 	return i, err
 }
@@ -271,6 +283,15 @@ func (q *Queries) CreateWebApp(ctx context.Context, arg CreateWebAppParams) (Web
 	return i, err
 }
 
+const deleteSiteRow = `-- name: DeleteSiteRow :exec
+DELETE FROM sites WHERE id = ?
+`
+
+func (q *Queries) DeleteSiteRow(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteSiteRow, id)
+	return err
+}
+
 const findAppSourcesByRepoBranch = `-- name: FindAppSourcesByRepoBranch :many
 SELECT id, name, repo, branch, kind, auto_deploy FROM app_sources WHERE repo = ? AND branch = ? AND auto_deploy = 1
 `
@@ -328,8 +349,26 @@ func (q *Queries) GetAppSource(ctx context.Context, id int64) (AppSource, error)
 	return i, err
 }
 
+const getAppSourceByName = `-- name: GetAppSourceByName :one
+SELECT id, name, repo, branch, kind, auto_deploy FROM app_sources WHERE name = ? LIMIT 1
+`
+
+func (q *Queries) GetAppSourceByName(ctx context.Context, name string) (AppSource, error) {
+	row := q.db.QueryRowContext(ctx, getAppSourceByName, name)
+	var i AppSource
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Repo,
+		&i.Branch,
+		&i.Kind,
+		&i.AutoDeploy,
+	)
+	return i, err
+}
+
 const getBench = `-- name: GetBench :one
-SELECT id, server_id, name, path, frappe_version, created_at FROM benches WHERE id = ? LIMIT 1
+SELECT id, server_id, name, path, frappe_version, created_at, facts_json FROM benches WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) GetBench(ctx context.Context, id int64) (Bench, error) {
@@ -341,6 +380,30 @@ func (q *Queries) GetBench(ctx context.Context, id int64) (Bench, error) {
 		&i.Name,
 		&i.Path,
 		&i.FrappeVersion,
+		&i.CreatedAt,
+		&i.FactsJson,
+	)
+	return i, err
+}
+
+const getDeployPoint = `-- name: GetDeployPoint :one
+SELECT id, bench_id, app_name, prev_commit, backups_json, created_at FROM frappe_deploy_points WHERE bench_id = ? AND app_name = ? LIMIT 1
+`
+
+type GetDeployPointParams struct {
+	BenchID int64  `json:"bench_id"`
+	AppName string `json:"app_name"`
+}
+
+func (q *Queries) GetDeployPoint(ctx context.Context, arg GetDeployPointParams) (FrappeDeployPoint, error) {
+	row := q.db.QueryRowContext(ctx, getDeployPoint, arg.BenchID, arg.AppName)
+	var i FrappeDeployPoint
+	err := row.Scan(
+		&i.ID,
+		&i.BenchID,
+		&i.AppName,
+		&i.PrevCommit,
+		&i.BackupsJson,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -491,7 +554,7 @@ func (q *Queries) ListAppSources(ctx context.Context) ([]AppSource, error) {
 }
 
 const listBenches = `-- name: ListBenches :many
-SELECT id, server_id, name, path, frappe_version, created_at FROM benches ORDER BY server_id, path
+SELECT id, server_id, name, path, frappe_version, created_at, facts_json FROM benches ORDER BY server_id, path
 `
 
 func (q *Queries) ListBenches(ctx context.Context) ([]Bench, error) {
@@ -510,6 +573,7 @@ func (q *Queries) ListBenches(ctx context.Context) ([]Bench, error) {
 			&i.Path,
 			&i.FrappeVersion,
 			&i.CreatedAt,
+			&i.FactsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -525,7 +589,7 @@ func (q *Queries) ListBenches(ctx context.Context) ([]Bench, error) {
 }
 
 const listBenchesForServer = `-- name: ListBenchesForServer :many
-SELECT id, server_id, name, path, frappe_version, created_at FROM benches WHERE server_id = ? ORDER BY path
+SELECT id, server_id, name, path, frappe_version, created_at, facts_json FROM benches WHERE server_id = ? ORDER BY path
 `
 
 func (q *Queries) ListBenchesForServer(ctx context.Context, serverID int64) ([]Bench, error) {
@@ -544,6 +608,7 @@ func (q *Queries) ListBenchesForServer(ctx context.Context, serverID int64) ([]B
 			&i.Path,
 			&i.FrappeVersion,
 			&i.CreatedAt,
+			&i.FactsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -559,7 +624,7 @@ func (q *Queries) ListBenchesForServer(ctx context.Context, serverID int64) ([]B
 }
 
 const listFrappeAppsForBench = `-- name: ListFrappeAppsForBench :many
-SELECT id, bench_id, app_source_id, app_name, current_commit FROM frappe_apps WHERE bench_id = ? ORDER BY app_name
+SELECT id, bench_id, app_source_id, app_name, current_commit, previous_commit FROM frappe_apps WHERE bench_id = ? ORDER BY app_name
 `
 
 func (q *Queries) ListFrappeAppsForBench(ctx context.Context, benchID int64) ([]FrappeApp, error) {
@@ -577,6 +642,7 @@ func (q *Queries) ListFrappeAppsForBench(ctx context.Context, benchID int64) ([]
 			&i.AppSourceID,
 			&i.AppName,
 			&i.CurrentCommit,
+			&i.PreviousCommit,
 		); err != nil {
 			return nil, err
 		}
@@ -776,6 +842,21 @@ func (q *Queries) SetAppSourceAutoDeploy(ctx context.Context, arg SetAppSourceAu
 	return err
 }
 
+const setBenchFacts = `-- name: SetBenchFacts :exec
+UPDATE benches SET facts_json = ?, frappe_version = ? WHERE id = ?
+`
+
+type SetBenchFactsParams struct {
+	FactsJson     string         `json:"facts_json"`
+	FrappeVersion sql.NullString `json:"frappe_version"`
+	ID            int64          `json:"id"`
+}
+
+func (q *Queries) SetBenchFacts(ctx context.Context, arg SetBenchFactsParams) error {
+	_, err := q.db.ExecContext(ctx, setBenchFacts, arg.FactsJson, arg.FrappeVersion, arg.ID)
+	return err
+}
+
 const setFrappeAppCommit = `-- name: SetFrappeAppCommit :exec
 UPDATE frappe_apps SET current_commit = ? WHERE bench_id = ? AND app_name = ?
 `
@@ -788,6 +869,28 @@ type SetFrappeAppCommitParams struct {
 
 func (q *Queries) SetFrappeAppCommit(ctx context.Context, arg SetFrappeAppCommitParams) error {
 	_, err := q.db.ExecContext(ctx, setFrappeAppCommit, arg.CurrentCommit, arg.BenchID, arg.AppName)
+	return err
+}
+
+const setFrappeAppCommits = `-- name: SetFrappeAppCommits :exec
+UPDATE frappe_apps SET previous_commit = ?, current_commit = ?
+WHERE bench_id = ? AND app_name = ?
+`
+
+type SetFrappeAppCommitsParams struct {
+	PreviousCommit sql.NullString `json:"previous_commit"`
+	CurrentCommit  sql.NullString `json:"current_commit"`
+	BenchID        int64          `json:"bench_id"`
+	AppName        string         `json:"app_name"`
+}
+
+func (q *Queries) SetFrappeAppCommits(ctx context.Context, arg SetFrappeAppCommitsParams) error {
+	_, err := q.db.ExecContext(ctx, setFrappeAppCommits,
+		arg.PreviousCommit,
+		arg.CurrentCommit,
+		arg.BenchID,
+		arg.AppName,
+	)
 	return err
 }
 
@@ -912,6 +1015,46 @@ func (q *Queries) SitesForBench(ctx context.Context, benchID int64) ([]Site, err
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateSiteApps = `-- name: UpdateSiteApps :exec
+UPDATE sites SET apps_json = ? WHERE id = ?
+`
+
+type UpdateSiteAppsParams struct {
+	AppsJson string `json:"apps_json"`
+	ID       int64  `json:"id"`
+}
+
+func (q *Queries) UpdateSiteApps(ctx context.Context, arg UpdateSiteAppsParams) error {
+	_, err := q.db.ExecContext(ctx, updateSiteApps, arg.AppsJson, arg.ID)
+	return err
+}
+
+const upsertDeployPoint = `-- name: UpsertDeployPoint :exec
+INSERT INTO frappe_deploy_points (bench_id, app_name, prev_commit, backups_json)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (bench_id, app_name)
+DO UPDATE SET prev_commit = excluded.prev_commit,
+              backups_json = excluded.backups_json,
+              created_at = unixepoch()
+`
+
+type UpsertDeployPointParams struct {
+	BenchID     int64  `json:"bench_id"`
+	AppName     string `json:"app_name"`
+	PrevCommit  string `json:"prev_commit"`
+	BackupsJson string `json:"backups_json"`
+}
+
+func (q *Queries) UpsertDeployPoint(ctx context.Context, arg UpsertDeployPointParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDeployPoint,
+		arg.BenchID,
+		arg.AppName,
+		arg.PrevCommit,
+		arg.BackupsJson,
+	)
+	return err
 }
 
 const webAppsForSource = `-- name: WebAppsForSource :many

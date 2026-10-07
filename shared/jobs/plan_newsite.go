@@ -8,6 +8,10 @@ package jobs
 func (p NewSiteParams) Steps(ctx PlanContext) ([]Step, error) {
 	admin := ctx.secret(p.AdminPassword)
 	dbRoot := ctx.secret(p.DBRootPassword)
+	dbUser := p.DBRootUser
+	if dbUser == "" {
+		dbUser = "root"
+	}
 
 	steps := []Step{
 		{
@@ -16,9 +20,10 @@ func (p NewSiteParams) Steps(ctx PlanContext) ([]Step, error) {
 			Command: "bench",
 			Args: []string{
 				"new-site", p.Domain,
-				"--db-root-username", "root",
+				"--db-root-username", dbUser,
 				"--db-root-password", dbRoot,
 				"--admin-password", admin,
+				"--mariadb-user-host-login-scope=%",
 			},
 			Redact: []string{dbRoot, admin},
 		},
@@ -31,23 +36,5 @@ func (p NewSiteParams) Steps(ctx PlanContext) ([]Step, error) {
 			Args:    []string{"--site", p.Domain, "install-app", app},
 		})
 	}
-	steps = append(steps,
-		Step{
-			Name:    "setup nginx",
-			Dir:     p.BenchPath,
-			Command: "bench",
-			Args:    []string{"setup", "nginx", "--yes"},
-		},
-		Step{
-			Name:    "nginx test",
-			Command: "sudo",
-			Args:    []string{"/usr/sbin/nginx", "-t"},
-		},
-		Step{
-			Name:    "nginx reload",
-			Command: "sudo",
-			Args:    []string{"/usr/bin/systemctl", "reload", "nginx"},
-		},
-	)
 	return steps, nil
 }

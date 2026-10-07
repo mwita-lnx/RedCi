@@ -58,6 +58,45 @@ func (p DeployFrappeAppParams) Validate(roots []string) error {
 	return nil
 }
 
+// RollbackFrappeAppParams drives `rollback_frappe_app`: check out the previous
+// commit, reinstall deps, and for each site restore the pre-deploy database
+// backup taken during the deploy we are reverting. Backups maps site -> the
+// absolute path of the database backup file to restore.
+type RollbackFrappeAppParams struct {
+	BenchPath  string            `json:"bench_path"`
+	App        string            `json:"app"`
+	Branch     string            `json:"branch"`
+	Commit     string            `json:"commit"`  // previous (rollback target) commit
+	Sites      []string          `json:"sites"`
+	Backups    map[string]string `json:"backups"` // site -> db backup file path
+	HasPackage bool              `json:"has_package_json"`
+	CloneTok   SecretRef         `json:"clone_token"`
+}
+
+func (p RollbackFrappeAppParams) Validate(roots []string) error {
+	if err := ValidatePathUnder(p.BenchPath, roots); err != nil {
+		return err
+	}
+	if err := ValidateAppName(p.App); err != nil {
+		return err
+	}
+	if err := ValidateCommit(p.Commit); err != nil {
+		return err
+	}
+	if err := validateBranch(p.Branch); err != nil {
+		return err
+	}
+	if len(p.Sites) == 0 {
+		return fmt.Errorf("rollback_frappe_app: no sites to restore")
+	}
+	for _, s := range p.Sites {
+		if err := ValidateDomain(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // BackupSiteParams drives `backup_site`.
 type BackupSiteParams struct {
 	BenchPath string `json:"bench_path"`

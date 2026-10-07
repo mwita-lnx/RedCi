@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -84,11 +85,15 @@ func (s *Server) handleNewSiteSubmit(w http.ResponseWriter, r *http.Request) {
 	domain := strings.TrimSpace(r.PostFormValue("domain"))
 	apps := splitApps(r.PostFormValue("apps"))
 	adminPw := r.PostFormValue("admin_password")
+	dbRootUser := strings.TrimSpace(r.PostFormValue("db_root_user"))
 	dbPw := r.PostFormValue("db_root_password")
 	leEmail := strings.TrimSpace(r.PostFormValue("le_email"))
 	ssl := r.PostFormValue("ssl") == "on"
+	if dbRootUser == "" {
+		dbRootUser = "root"
+	}
 
-	depID, err := s.CreateSiteDeploy(r.Context(), benchID, domain, apps, adminPw, dbPw, leEmail, ssl, user.ID)
+	depID, err := s.CreateSiteDeploy(r.Context(), benchID, domain, apps, adminPw, dbRootUser, dbPw, leEmail, ssl, user.ID)
 	if err != nil {
 		benches, _ := s.db.ReadQ.ListBenches(r.Context())
 		w.WriteHeader(http.StatusBadRequest)
@@ -98,6 +103,96 @@ func (s *Server) handleNewSiteSubmit(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "site.create", "site", 0, domain)
 	http.Redirect(w, r, "/deploys", http.StatusSeeOther)
 	_ = depID
+}
+
+func (s *Server) handleSiteRefresh(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	site, err := s.db.ReadQ.GetSite(r.Context(), pathID(r))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	bench, err := s.db.ReadQ.GetBench(r.Context(), site.BenchID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := s.RunServerStatus(r.Context(), bench.ServerID, user.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.audit(r, "site.refresh", "site", site.ID, site.Domain)
+	http.Redirect(w, r, "/deploys", http.StatusSeeOther)
+}
+
+func (s *Server) handleSiteAppRollback(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	site, err := s.db.ReadQ.GetSite(r.Context(), pathID(r))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	app := r.PathValue("app")
+	if _, err := s.RollbackFrappeApp(r.Context(), site.BenchID, app, user.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.audit(r, "app.rollback", "bench", site.BenchID, app)
+	http.Redirect(w, r, "/deploys", http.StatusSeeOther)
+}
+
+func (s *Server) handleSiteDetail(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	site, err := s.db.ReadQ.GetSite(r.Context(), pathID(r))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	var installedApps []string
+	_ = json.Unmarshal([]byte(site.AppsJson), &installedApps)
+
+	// Build version map from frappe_apps rows (current_commit holds the version
+	// string populated during server_status import).
+	frappeApps, _ := s.db.ReadQ.ListFrappeAppsForBench(r.Context(), site.BenchID)
+	appVerMap := make(map[string]string, len(frappeApps))
+	for _, fa := range frappeApps {
+		if fa.CurrentCommit.Valid {
+			appVerMap[fa.AppName] = fa.CurrentCommit.String
+		} else {
+			appVerMap[fa.AppName] = ""
+		}
+	}
+	// Build versions map filtered to this site's installed apps.
+	versions := make(map[string]string, len(installedApps))
+	for _, app := range installedApps {
+		versions[app] = appVerMap[app]
+	}
+	// Apps with a recorded rollback point can be rolled back.
+	rollbackable := make(map[string]bool, len(installedApps))
+	for _, app := range installedApps {
+		if _, err := s.db.ReadQ.GetDeployPoint(r.Context(), store.GetDeployPointParams{
+			BenchID: site.BenchID, AppName: app,
+		}); err == nil {
+			rollbackable[app] = true
+		}
+	}
+	render(w, r, components.SiteDetail(user, site, versions, rollbackable))
+}
+
+func (s *Server) handleSiteDelete(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	id := pathID(r)
+	dbRootUser := strings.TrimSpace(r.PostFormValue("db_root_user"))
+	dbRootPassword := r.PostFormValue("db_root_password")
+	if dbRootUser == "" {
+		dbRootUser = "root"
+	}
+	if _, err := s.DeleteSite(r.Context(), id, dbRootUser, dbRootPassword, user.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.audit(r, "site.delete", "site", id, "")
+	http.Redirect(w, r, "/sites", http.StatusSeeOther)
 }
 
 func (s *Server) handleSiteBackup(w http.ResponseWriter, r *http.Request) {

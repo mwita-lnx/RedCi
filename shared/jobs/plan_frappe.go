@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"encoding/base64"
-	"path"
 )
 
 // gitTokenEnv builds the environment that feeds a short-lived clone token to
@@ -42,86 +41,9 @@ func (p GetFrappeAppParams) Steps(ctx PlanContext) ([]Step, error) {
 	}, nil
 }
 
-// DeployFrappeAppParams.Steps follows the spec's exact sequence. Maintenance
-// mode (when requested) is turned on before migrate and ALWAYS turned off at
-// the end as a deferred cleanup, even if an earlier step failed — the runner
-// runs every step tagged AlwaysRun regardless of a prior failure.
-func (p DeployFrappeAppParams) Steps(ctx PlanContext) ([]Step, error) {
-	token := ctx.secret(p.CloneTok)
-	appDir := path.Join(p.BenchPath, "apps", p.App)
-
-	var steps []Step
-
-	// 1. Backup each affected site.
-	for _, site := range p.Sites {
-		steps = append(steps, Step{
-			Name: "backup " + site, Dir: p.BenchPath, Command: "bench",
-			Args: []string{"--site", site, "backup"},
-		})
-	}
-	// 2. Fetch and check out the exact commit.
-	steps = append(steps,
-		Step{
-			Name: "fetch", Dir: appDir, Command: "git",
-			Args: []string{"fetch", "origin", p.Branch},
-			Env:  gitTokenEnv(token), Redact: []string{token},
-		},
-		Step{
-			Name: "checkout", Dir: appDir, Command: "git",
-			Args: []string{"checkout", "-B", p.Branch, p.Commit},
-		},
-		// 3. Python deps.
-		Step{
-			Name: "pip install", Dir: p.BenchPath, Command: "./env/bin/pip",
-			Args: []string{"install", "--quiet", "-e", path.Join("apps", p.App)},
-		},
-	)
-	// 4. Node deps only when the app has a package.json.
-	if p.HasPackage {
-		steps = append(steps, Step{
-			Name: "yarn install", Dir: appDir, Command: "yarn",
-			Args: []string{"install", "--frozen-lockfile"},
-		})
-	}
-	// 5. Maintenance on (optional).
-	if p.Maintenance {
-		for _, site := range p.Sites {
-			steps = append(steps, Step{
-				Name: "maintenance on " + site, Dir: p.BenchPath, Command: "bench",
-				Args: []string{"--site", site, "set-maintenance-mode", "on"},
-			})
-		}
-	}
-	// 6. Migrate each affected site.
-	for _, site := range p.Sites {
-		steps = append(steps, Step{
-			Name: "migrate " + site, Dir: p.BenchPath, Command: "bench",
-			Args: []string{"--site", site, "migrate"},
-		})
-	}
-	// 7. Build, 8. Restart.
-	steps = append(steps,
-		Step{
-			Name: "build", Dir: p.BenchPath, Command: "bench",
-			Args: []string{"build", "--app", p.App},
-		},
-		Step{
-			Name: "restart", Dir: p.BenchPath, Command: "bench",
-			Args: []string{"restart"},
-		},
-	)
-	// 9. Maintenance off — ALWAYS runs (deferred cleanup).
-	if p.Maintenance {
-		for _, site := range p.Sites {
-			steps = append(steps, Step{
-				Name: "maintenance off " + site, Dir: p.BenchPath, Command: "bench",
-				Args:      []string{"--site", site, "set-maintenance-mode", "off"},
-				AlwaysRun: true,
-			})
-		}
-	}
-	return steps, nil
-}
+// NOTE: deploy_frappe_app and rollback_frappe_app run as custom ops (see
+// agent/internal/ops/op_frappe.go) so they can capture the previous commit and
+// the pre-deploy database backups into result_json for rollback.
 
 // BackupSiteParams.Steps: a single bench backup, optionally with files.
 func (p BackupSiteParams) Steps(ctx PlanContext) ([]Step, error) {

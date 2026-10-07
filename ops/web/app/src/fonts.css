@@ -1,0 +1,35 @@
+/* Self-hosted fonts (latin subset, variable woff2) so the strict `self` CSP
+   needs no external font host. Vite fingerprints these into dist/assets/. */
+
+/* Bricolage Grotesque — display: headlines, section titles, stat numbers. */
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url("./fonts/bricolage.woff2") format("woff2");
+}
+
+/* IBM Plex Sans — body: labels, tables, buttons, UI copy. */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("./fonts/plexsans.woff2") format("woff2");
+}
+
+/* JetBrains Mono — code-like: hashes, versions, durations, logs. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("./fonts/jbmono.woff2") format("woff2");
+}
+
+:root {
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
