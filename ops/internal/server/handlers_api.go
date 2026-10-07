@@ -255,11 +255,14 @@ func (s *Server) apiBenchesOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type matrixRow struct {
+		SiteID   int64             `json:"site_id"`
 		Site     string            `json:"site"`
+		BenchID  int64             `json:"bench_id"`
 		Bench    string            `json:"bench"`
 		Env      string            `json:"env"`
 		Status   string            `json:"status"`
 		Backup   int64             `json:"last_backup"`
+		Apps     []string          `json:"apps"`
 		Versions map[string]string `json:"versions"`
 	}
 	appSet := map[string]bool{}
@@ -295,8 +298,8 @@ func (s *Server) apiBenchesOverview(w http.ResponseWriter, r *http.Request) {
 				appSet[app] = true
 			}
 			matrix = append(matrix, matrixRow{
-				Site: st.Domain, Bench: b.Name, Env: benchEnvGuess(b.Name),
-				Status: st.Status, Backup: st.LastBackupAt.Int64, Versions: rowVers,
+				SiteID: st.ID, Site: st.Domain, BenchID: b.ID, Bench: b.Name, Env: benchEnvGuess(b.Name),
+				Status: st.Status, Backup: st.LastBackupAt.Int64, Apps: installed, Versions: rowVers,
 			})
 			if st.LastBackupAt.Valid {
 				backups = append(backups, map[string]any{"site": st.Domain, "at": st.LastBackupAt.Int64})
@@ -305,11 +308,16 @@ func (s *Server) apiBenchesOverview(w http.ResponseWriter, r *http.Request) {
 
 		facts := map[string]any{}
 		_ = json.Unmarshal([]byte(b.FactsJson), &facts)
+		// Prefer the bench's own frappe app version over the server-level string.
+		frappeVer := verByApp["frappe"]
+		if frappeVer == "" {
+			frappeVer = nullStrVal(b.FrappeVersion)
+		}
 		benchOut = append(benchOut, map[string]any{
 			"id": b.ID, "name": b.Name, "path": b.Path,
 			"server_id": b.ServerID, "server_name": sv.Name,
 			"server_status": sv.Status,
-			"frappe_version": nullStrVal(b.FrappeVersion),
+			"frappe_version": frappeVer,
 			"env":   benchEnvGuess(b.Name),
 			"sites": activeSites,
 			"apps":  appVersionsList(appNames, verByApp),
@@ -773,6 +781,7 @@ func (s *Server) registerAPIRoutes() {
 	m.HandleFunc("GET /api/v1/jobs/{id}", s.requireRole(auth.RoleViewer, s.apiJobDetail))
 
 	m.HandleFunc("GET /api/v1/servers", s.requireRole(auth.RoleViewer, s.apiServers))
+	m.HandleFunc("GET /api/v1/servers/fleet", s.requireRole(auth.RoleViewer, s.apiFleet))
 	m.HandleFunc("POST /api/v1/servers", s.requireRole(auth.RoleAdmin, s.apiServerAdd))
 	m.HandleFunc("POST /api/v1/servers/{id}/refresh", s.requireRole(auth.RoleAdmin, s.apiServerRefresh))
 	m.HandleFunc("POST /api/v1/servers/{id}/import", s.requireRole(auth.RoleAdmin, s.apiServerImport))

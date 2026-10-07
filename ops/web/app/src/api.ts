@@ -92,12 +92,26 @@ export interface BenchCard {
   apps: { name: string; version: string }[]; facts: BenchFacts;
 }
 export interface MatrixRow {
-  site: string; bench: string; env: string; status: string; last_backup: number;
-  versions: Record<string, string>;
+  site_id: number; site: string; bench_id: number; bench: string; env: string;
+  status: string; last_backup: number; apps: string[]; versions: Record<string, string>;
 }
 export interface BenchesOverview {
   benches: BenchCard[]; columns: string[]; matrix: MatrixRow[];
   backups: { site: string; at: number }[];
+}
+
+export interface FleetServer {
+  id: number; name: string; hostname: string; status: string; online: boolean;
+  role: string; agent_version: string; cpus: number; mem_total_mb: number;
+  cpu_pct: number; mem_pct: number; disk_pct: number; os: string;
+  benches: number; uptime_days: number; last_seen: number;
+}
+export interface Fleet {
+  servers: FleetServer[]; online: number; total: number;
+  total_cpu: number; total_mem_mb: number; used_mem_mb: number; running_jobs: number;
+  agent_versions: { version: string; count: number; latest: boolean }[];
+  latest_agent: string;
+  attention: { level: string; server: string; title: string; detail: string }[];
 }
 
 export interface GithubStatus { connected: boolean; login?: string; error?: string }

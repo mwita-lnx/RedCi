@@ -1,37 +1,48 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet, atLeast, BenchCard, BenchesOverview, MatrixRow } from "../api";
-import { Empty, PanelBox, TableSkeleton } from "../ui";
+import { Empty, PanelBox } from "../ui";
 
 function ago(ts: number) {
-  if (!ts) return "—";
+  if (!ts) return "no backup";
   const s = Math.floor(Date.now() / 1000 - ts);
-  if (s < 60) return "now"; if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`; return `${Math.floor(s / 86400)}d ago`;
+  if (s < 60) return "backup now"; if (s < 3600) return `backup ${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `backup ${Math.floor(s / 3600)}h ago`; return `backup ${Math.floor(s / 86400)}d ago`;
 }
-
 type Filter = "all" | "production" | "staging" | "preview";
+type View = "list" | "grid";
 
 export function BenchesSitesPage({ role }: { role?: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ["benches-overview"], queryFn: () => apiGet<BenchesOverview>("/benches/overview"), refetchInterval: 15_000,
   });
   const [filter, setFilter] = useState<Filter>("all");
+  const [view, setView] = useState<View>("list");
   const canAdmin = atLeast(role ?? "", "admin");
 
   const benches = data?.benches ?? [];
   const totalSites = benches.reduce((a, b) => a + b.sites, 0);
-  const matrix = (data?.matrix ?? []).filter((r) => filter === "all" || r.env === filter);
+
+  // group matrix rows (sites) by bench id
+  const sitesByBench = useMemo(() => {
+    const m = new Map<number, MatrixRow[]>();
+    for (const r of data?.matrix ?? []) {
+      if (filter !== "all" && r.env !== filter) continue;
+      if (!m.has(r.bench_id)) m.set(r.bench_id, []);
+      m.get(r.bench_id)!.push(r);
+    }
+    return m;
+  }, [data, filter]);
+
+  const visibleBenches = benches.filter((b) => filter === "all" || b.env === filter || (sitesByBench.get(b.id)?.length ?? 0) > 0);
 
   return (
     <div className="stack">
       <div>
-        <div className="rt-eyebrow">FRAPPE · {benches.length} BENCHES · {totalSites} SITES</div>
+        <div className="rt-eyebrow">FRAPPE · {benches.length} BENCH{benches.length === 1 ? "" : "ES"} · {totalSites} SITE{totalSites === 1 ? "" : "S"}</div>
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-          <div className="rt-title" style={{ fontSize: 40 }}>
-            Every bench, every site,<br /><span style={{ color: "var(--brand)" }}>every app version.</span>
-          </div>
+          <div className="rt-title" style={{ fontSize: 40 }}>Every bench, every site,<br /><span style={{ color: "var(--brand)" }}>every app version.</span></div>
           <div style={{ display: "flex", gap: 10 }}>
             {canAdmin && <Link className="btn secondary" to="/servers">Connect a bench</Link>}
             {canAdmin && <Link className="btn" to="/sites">+ New site</Link>}
@@ -39,46 +50,39 @@ export function BenchesSitesPage({ role }: { role?: string }) {
         </div>
       </div>
 
-      {/* bench cards */}
-      {isLoading ? (
-        <div className="bench-grid">{[0, 1, 2].map((i) => <div key={i} className="bench-card"><div className="skeleton" style={{ height: 180 }} /></div>)}</div>
-      ) : benches.length === 0 ? (
-        <PanelBox><Empty>No benches yet. Connect a server, refresh and import its benches.</Empty></PanelBox>
-      ) : (
-        <div className="bench-grid">
-          {benches.map((b) => <BenchCardView key={b.id} b={b} />)}
-        </div>
-      )}
-
-      {/* sites × apps matrix + side panels */}
       <div className="grid-2">
         <PanelBox
-          title="Sites × apps"
+          title="Benches"
           action={
-            <div className="rtabs">
-              {(["all", "production", "staging", "preview"] as Filter[]).map((f) => (
-                <button key={f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
-                  {f === "all" ? "All" : f[0].toUpperCase() + f.slice(1)}
-                </button>
-              ))}
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <div className="rtabs">
+                {(["all", "production", "staging", "preview"] as Filter[]).map((f) => (
+                  <button key={f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
+                    {f === "all" ? "All" : f[0].toUpperCase() + f.slice(1)}
+                  </button>
+                ))}
+              </div>
+              <div className="view-toggle">
+                <button className={view === "list" ? "on" : ""} onClick={() => setView("list")}>List</button>
+                <button className={view === "grid" ? "on" : ""} onClick={() => setView("grid")}>Grid</button>
+              </div>
             </div>
           }
         >
-          {isLoading ? <TableSkeleton cols={6} /> : matrix.length === 0 ? <Empty>No sites.</Empty> : (
-            <div className="matrix-wrap">
-              <table className="matrix">
-                <thead>
-                  <tr>
-                    <th>Site</th>
-                    {(data?.columns ?? []).map((c) => <th key={c}>{c}</th>)}
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {matrix.map((r) => <MatrixRowView key={r.site} r={r} cols={data?.columns ?? []} />)}
-                </tbody>
-              </table>
+          {isLoading ? (
+            <div style={{ padding: 14 }}><div className="skeleton" style={{ height: 160 }} /></div>
+          ) : visibleBenches.length === 0 ? (
+            <Empty>No benches. Connect a server, refresh and import its benches.</Empty>
+          ) : view === "list" ? (
+            <div style={{ padding: 14 }}>
+              <div className="bench-list">
+                {visibleBenches.map((b) => (
+                  <BenchAccordion key={b.id} b={b} sites={sitesByBench.get(b.id) ?? []} defaultOpen={visibleBenches.length <= 2} />
+                ))}
+              </div>
             </div>
+          ) : (
+            <GridView data={data!} filter={filter} />
           )}
         </PanelBox>
 
@@ -91,60 +95,91 @@ export function BenchesSitesPage({ role }: { role?: string }) {
   );
 }
 
-function BenchCardView({ b }: { b: BenchCard }) {
+function BenchAccordion({ b, sites, defaultOpen }: { b: BenchCard; sites: MatrixRow[]; defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const nav = useNavigate();
   const f = b.facts || {};
   const healthy = b.server_status === "online";
+  const topApps = b.apps.slice(0, 3);
+
   return (
-    <div className="bench-card">
-      <div className="bc-top">
-        <div>
-          <div className="bc-name">{b.name}</div>
-          <div className="bc-sub">{b.env ? b.env[0].toUpperCase() + b.env.slice(1) : "Bench"} · {b.sites} site{b.sites === 1 ? "" : "s"} · {b.server_name}</div>
+    <div className={`bench-acc ${open ? "open" : ""}`}>
+      <div className="bench-hd" onClick={() => setOpen((o) => !o)}>
+        <span className="chev">▶</span>
+        <div className="bh-main">
+          <span className="bh-name"><span className={`bh-sdot ${healthy ? "on" : "off"}`} />{b.name}</span>
+          <span className="bh-meta">{b.env ? b.env[0].toUpperCase() + b.env.slice(1) + " · " : ""}{b.server_name} · frappe {b.frappe_version || "—"}</span>
         </div>
-        <span className={`badge ${healthy ? "healthy" : "offline"}`}>{healthy ? "Healthy" : b.server_status}</span>
+        <div className="bh-chips">
+          {topApps.map((a) => <span key={a.name} className="apptag">{a.name} <b>{a.version || "—"}</b></span>)}
+        </div>
+        <span className="bh-count">{sites.length} site{sites.length === 1 ? "" : "s"}</span>
       </div>
 
-      <div className="bc-apps">
-        {b.apps.length === 0 ? <span className="muted" style={{ fontSize: 12 }}>no apps recorded</span> :
-          b.apps.map((a) => <span key={a.name} className="apptag">{a.name} <b>{a.version || "—"}</b></span>)}
-      </div>
+      {open && (
+        <div className="bench-body">
+          <div className="bench-facts-row">
+            <div className="bf"><div className="k">Runtime</div><div className="v">{f.python_version ? `Python ${f.python_version}` : "—"}{f.node_version ? ` · Node ${f.node_version}` : ""}</div></div>
+            <div className="bf"><div className="k">Database</div><div className="v">{f.db_type || "—"}</div></div>
+            <div className="bf"><div className="k">Workers</div><div className="v">{(f.web_workers || f.rq_workers) ? `${f.web_workers ?? 0} web · ${f.rq_workers ?? 0} rq` : "—"}</div></div>
+            <div className="bf"><div className="k">Scheduler</div><div className="v">{f.scheduler_on === undefined ? "—" : f.scheduler_on ? "On" : "Off"}</div></div>
+            <div className="bf"><div className="k">Path</div><div className="v" style={{ color: "var(--text-faint)" }}>{b.path}</div></div>
+          </div>
 
-      <div className="bc-facts">
-        <div className="bc-fact"><div className="fk">Runtime</div><div className="fv">{f.python_version ? `Python ${f.python_version}` : "—"}{f.node_version ? ` · Node ${f.node_version}` : ""}</div></div>
-        <div className="bc-fact"><div className="fk">Database</div><div className="fv">{f.db_type ? f.db_type : "—"}</div></div>
-        <div className="bc-fact"><div className="fk">Workers</div><div className="fv">{(f.web_workers || f.rq_workers) ? `${f.web_workers ?? 0} web · ${f.rq_workers ?? 0} rq` : "—"}</div></div>
-        <div className="bc-fact"><div className="fk">Scheduler</div><div className="fv">{f.scheduler_on === undefined ? "—" : f.scheduler_on ? "On" : "Off"}</div></div>
-      </div>
-
-      <div className={`bc-note ${healthy ? "ok" : ""}`}>{b.path}</div>
+          {sites.length === 0 ? (
+            <div className="bench-empty-sites">No sites on this bench.</div>
+          ) : (
+            sites.map((s) => (
+              <div className="site-row" key={s.site_id} onClick={() => nav(`/sites/${s.site_id}`)}>
+                <span className="sr-dom">{s.site}</span>
+                <span className="sr-apps">
+                  {s.apps.length === 0 ? <span className="muted" style={{ fontSize: 12 }}>no apps</span> :
+                    s.apps.slice(0, 6).map((app) => (
+                      <span key={app} className="vtag">{app}{s.versions[app] ? ` ${s.versions[app]}` : ""}</span>
+                    ))}
+                  {s.apps.length > 6 && <span className="vtag none">+{s.apps.length - 6}</span>}
+                </span>
+                <span className="sr-backup">{ago(s.last_backup)}</span>
+                <span className={`badge ${s.status === "active" ? "active" : s.status}`}>{s.status === "active" ? "Live" : s.status}</span>
+                <span className="sr-arrow">→</span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function MatrixRowView({ r, cols }: { r: MatrixRow; cols: string[] }) {
+function GridView({ data, filter }: { data: BenchesOverview; filter: Filter }) {
+  const nav = useNavigate();
+  const rows = data.matrix.filter((r) => filter === "all" || r.env === filter);
+  if (rows.length === 0) return <Empty>No sites.</Empty>;
   return (
-    <tr>
-      <td className="site-cell">
-        {r.site}
-        <div className="sub">{r.bench} · backup {ago(r.last_backup)}</div>
-      </td>
-      {cols.map((c) => {
-        const v = r.versions[c];
-        const installed = c in r.versions;
-        return (
-          <td key={c}>
-            {installed
-              ? <span className={`vtag ${r.env === "staging" || r.env === "preview" ? "new" : ""}`}>{v || "—"}</span>
-              : <span className="vtag none">—</span>}
-          </td>
-        );
-      })}
-      <td><span className={`badge ${r.status === "active" ? "active" : r.status}`}>{r.status === "active" ? "Live" : r.status}</span></td>
-    </tr>
+    <div className="matrix-wrap">
+      <table className="matrix">
+        <thead>
+          <tr><th>Site</th>{data.columns.map((c) => <th key={c}>{c}</th>)}<th>Status</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.site_id} style={{ cursor: "pointer" }} onClick={() => nav(`/sites/${r.site_id}`)}>
+              <td className="site-cell">{r.site}<div className="sub">{r.bench}</div></td>
+              {data.columns.map((c) => {
+                const installed = c in r.versions;
+                return <td key={c}>{installed
+                  ? <span className={`vtag ${r.env === "staging" || r.env === "preview" ? "new" : ""}`}>{r.versions[c] || "—"}</span>
+                  : <span className="vtag none">—</span>}</td>;
+              })}
+              <td><span className={`badge ${r.status === "active" ? "active" : r.status}`}>{r.status === "active" ? "Live" : r.status}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
-// Background jobs: aggregate RQ queue depths across benches (from facts).
 function JobsPanel({ benches }: { benches: BenchCard[] }) {
   const agg: Record<string, number> = {};
   let haveData = false;
@@ -163,9 +198,7 @@ function JobsPanel({ benches }: { benches: BenchCard[] }) {
             <div className="q-bar"><i className={n} style={{ width: `${((agg[n] ?? 0) / max) * 100}%` }} /></div>
           </div>
         ))}
-        <div className="q-foot">
-          {haveData ? "Queue depths from the latest server status." : "Queue depths appear after a server refresh collects them."}
-        </div>
+        <div className="q-foot">{haveData ? "Queue depths from the latest server status." : "Queue depths appear after a server refresh collects them."}</div>
       </div>
     </PanelBox>
   );
@@ -179,10 +212,7 @@ function BackupsPanel({ backups }: { backups: { site: string; at: number }[] }) 
         <div className="intro">Each deploy runs <b>bench backup</b> first. Most recent per site:</div>
         {recent.length === 0 ? <div className="muted" style={{ fontSize: 13, padding: "6px 0" }}>No backups recorded yet.</div> :
           recent.map((b) => (
-            <div className="bk" key={b.site}>
-              <span className="bk-site">{b.site}</span>
-              <span className="bk-meta">{ago(b.at)}</span>
-            </div>
+            <div className="bk" key={b.site}><span className="bk-site">{b.site}</span><span className="bk-meta">{ago(b.at)}</span></div>
           ))}
       </div>
     </PanelBox>

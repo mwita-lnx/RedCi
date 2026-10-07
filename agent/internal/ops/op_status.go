@@ -165,9 +165,9 @@ func readBenchFacts(root string) BenchFacts {
 		}
 	}
 
-	// Python version from the bundled virtualenv.
+	// Python version from the bundled virtualenv (version_info or version).
 	if out, err := os.ReadFile(filepath.Join(root, "env", "pyvenv.cfg")); err == nil {
-		if m := regexp.MustCompile(`version\s*=\s*([\d.]+)`).FindStringSubmatch(string(out)); m != nil {
+		if m := regexp.MustCompile(`version(?:_info)?\s*=\s*([\d.]+)`).FindStringSubmatch(string(out)); m != nil {
 			f.PythonVersion = m[1]
 		}
 	}

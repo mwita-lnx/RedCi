@@ -65,6 +65,46 @@ function colStatus(steps: Step[]): StStatus {
   return "pending";
 }
 
+interface Patch { name: string; app: string; dur?: string; status: StStatus }
+
+// Parse Frappe `bench migrate` output into a patch list:
+//   "Executing <app.patches...> in <site>"            -> running
+//   "done in 2.1s" / "processed X / Y"                -> completes the prior one
+//   "<app> · N upstream patches (a -> b)"             -> a single rolled-up entry
+function derivePatches(lines: Line[], jobStatus: string): Patch[] {
+  const patches: Patch[] = [];
+  let cur: Patch | null = null;
+  const appOf = (full: string) => full.split(".")[0];
+  for (const l of lines) {
+    const t = l.line;
+    let m = t.match(/Executing\s+([\w.]+patches[\w.]+)\s+in\s+\S+/i);
+    if (m) {
+      if (cur && cur.status === "running") cur.status = "succeeded";
+      cur = { name: m[1], app: appOf(m[1]), status: "running" };
+      patches.push(cur);
+      continue;
+    }
+    m = t.match(/(?:done in|completed in)\s+([\d.]+s)/i);
+    if (m && cur) { cur.dur = m[1]; cur.status = "succeeded"; cur = null; continue; }
+    // upstream app-level rollup, e.g. "erpnext · 13 upstream patches (15.38 → 15.40)"
+    m = t.match(/(\w+)\s*[·:-]\s*(\d+)\s+upstream patches/i);
+    if (m) patches.push({ name: `${m[2]} upstream patches`, app: m[1], status: "succeeded" });
+  }
+  if (cur && jobStatus !== "running" && jobStatus !== "claimed") cur.status = jobStatus === "failed" ? "failed" : "succeeded";
+  return patches;
+}
+
+function maintenanceOn(lines: Line[]): string {
+  // "maintenance on <site>" step marker or bench set-maintenance-mode on
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].line;
+    if (/set-maintenance-mode\s+off|maintenance off/i.test(t)) return "";
+    const m = t.match(/maintenance on\s+(\S+)|set-maintenance-mode on.*?--site\s+(\S+)/i);
+    if (m) return m[1] || m[2] || "site";
+  }
+  return "";
+}
+
 export function JobPage() {
   const { id } = useParams();
   const { data: job } = useQuery({ queryKey: ["job", id], queryFn: () => apiGet<Job>(`/jobs/${id}`) });
@@ -108,17 +148,21 @@ export function JobPage() {
 
   const steps = useMemo(() => deriveSteps(lines, status), [lines, status]);
   const cols = useMemo(() => groupStages(steps), [steps]);
+  const patches = useMemo(() => derivePatches(lines, status), [lines, status]);
+  const maint = useMemo(() => maintenanceOn(lines), [lines]);
   const total = job?.started && job?.finished ? job.finished - job.started : undefined;
 
   const title = job?.commit ? `${job.kind} ${job.commit.slice(0, 7)}` : (job?.kind ?? job?.type ?? `Run #${id}`);
   const runnerLabel = "runner local";
+  const patchesDone = patches.filter((p) => p.status === "succeeded").length;
 
   return (
     <>
       <div className="breadcrumb">
         <Link to="/">redci</Link><span className="sep">/</span>
-        <Link to="/deploys">runs</Link><span className="sep">/</span>
-        <span className="cur">#{id}</span>
+        {job?.target_type === "bench" ? <Link to="/benches">benches</Link> : <Link to="/deploys">runs</Link>}
+        <span className="sep">/</span>
+        <span className="cur">{job?.kind ? `${job.kind} ` : ""}#{job?.deploy_id ?? id}</span>
       </div>
 
       <div className="run-head">
@@ -142,6 +186,12 @@ export function JobPage() {
         </div>
       </div>
 
+      {maint && (status === "running" || status === "claimed") && (
+        <div className="maint-banner">
+          <span className="mb-ic">⚙</span> Maintenance mode on · <b>{maint}</b>
+        </div>
+      )}
+
       {cols.length > 0 && (
         <PanelBox>
           <div className="dag">
@@ -163,6 +213,25 @@ export function JobPage() {
               );
             })}
           </div>
+        </PanelBox>
+      )}
+
+      {patches.length > 0 && (
+        <PanelBox title="Patches" action={<span className="patch-count">{patchesDone}<span className="muted">/{patches.length}</span></span>}>
+          <table className="patches-table">
+            <tbody>
+              {patches.map((p, i) => (
+                <tr key={i}>
+                  <td style={{ width: 28 }}>
+                    <span className={`pnic ${p.status}`}>{p.status === "succeeded" ? "✓" : p.status === "failed" ? "✕" : p.status === "running" ? "•" : ""}</span>
+                  </td>
+                  <td className="mono">{p.name}</td>
+                  <td className="muted" style={{ textAlign: "right" }}>{p.app}</td>
+                  <td className="mono" style={{ textAlign: "right", width: 60 }}>{p.dur ?? (p.status === "running" ? "…" : "—")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </PanelBox>
       )}
 

@@ -26,6 +26,8 @@ type Facts struct {
 	MemTotalMB    int64    `json:"mem_total_mb"`
 	DiskFreeGB    int64    `json:"disk_free_gb"`
 	DiskUsedPct   int      `json:"disk_used_pct"`
+	CPUUsedPct    int      `json:"cpu_used_pct"`    // live load, sampled each heartbeat
+	MemUsedPct    int      `json:"mem_used_pct"`    // live memory pressure
 	NginxVersion  string   `json:"nginx_version,omitempty"`
 	BenchVersion  string   `json:"bench_version,omitempty"`
 	DockerVersion string   `json:"docker_version,omitempty"`
