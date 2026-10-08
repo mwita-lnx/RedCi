@@ -7,8 +7,8 @@ import { SiteDetailPage } from "./pages/SiteDetail";
 import { DeploysPage } from "./pages/Deploys";
 import { JobPage } from "./pages/Job";
 import { ServersPage } from "./pages/Servers";
-import { AppSourcesPage } from "./pages/AppSources";
 import { WebAppsPage } from "./pages/WebApps";
+import { BenchDetailPage } from "./pages/BenchDetail";
 import { RoutesPage } from "./pages/RoutesPage";
 import { PipelinesPage } from "./pages/Pipelines";
 import { PipelineDetailPage } from "./pages/PipelineDetail";
@@ -21,7 +21,7 @@ const NAV = [
   { to: "/", label: "Overview", end: true },
   { to: "/deploys", label: "Runs" },
   { to: "/benches", label: "Benches & sites" },
-  { to: "/app-sources", label: "Apps" },
+  { to: "/web-apps", label: "Web apps" },
   { to: "/fleet", label: "Servers & agents" },
   { to: "/pipelines", label: "Deployments" },
   { to: "/routes", label: "Routes & nginx" },
@@ -64,7 +64,7 @@ export function App() {
           <Route path="/deploys" element={<DeploysPage />} />
           <Route path="/jobs/:id" element={<JobPage />} />
           <Route path="/servers" element={<ServersPage role={me?.role} />} />
-          <Route path="/app-sources" element={<AppSourcesPage role={me?.role} />} />
+          <Route path="/benches/:id" element={<BenchDetailPage role={me?.role} />} />
           <Route path="/web-apps" element={<WebAppsPage />} />
           <Route path="/routes" element={<RoutesPage role={me?.role} />} />
           <Route path="/settings" element={<SettingsPage role={me?.role} />} />

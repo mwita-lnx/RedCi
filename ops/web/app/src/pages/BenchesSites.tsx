@@ -81,7 +81,6 @@ export function BenchesSitesPage({ role }: { role?: string }) {
               <div className="bench-list">
                 {visibleBenches.map((b) => (
                   <BenchAccordion key={b.id} b={b} sites={sitesByBench.get(b.id) ?? []}
-                    defaultOpen={visibleBenches.length <= 2}
                     canAdmin={canAdmin} onNewSite={() => setNewSiteBench(b.id)} />
                 ))}
               </div>
@@ -104,75 +103,40 @@ export function BenchesSitesPage({ role }: { role?: string }) {
   );
 }
 
-function BenchAccordion({ b, sites, defaultOpen, canAdmin, onNewSite }: {
-  b: BenchCard; sites: MatrixRow[]; defaultOpen: boolean; canAdmin: boolean; onNewSite: () => void;
+function BenchAccordion({ b, sites, canAdmin, onNewSite }: {
+  b: BenchCard; sites: MatrixRow[]; canAdmin: boolean; onNewSite: () => void;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
   const nav = useNavigate();
-  const f = b.facts || {};
   const healthy = b.server_status === "online";
   const topApps = b.apps.slice(0, 3);
 
   return (
-    <div className={`bench-acc ${open ? "open" : ""}`}>
-      <div className="bench-hd" onClick={() => setOpen((o) => !o)}>
-        <span className="chev">▶</span>
+    <div className="bench-acc">
+      <div className="bench-hd" onClick={() => nav(`/benches/${b.id}`)} style={{ cursor: "pointer" }}>
         <div className="bh-main">
           <span className="bh-name"><span className={`bh-sdot ${healthy ? "on" : "off"}`} />{b.name}</span>
           <span className="bh-meta">{b.env ? b.env[0].toUpperCase() + b.env.slice(1) + " · " : ""}{b.server_name} · frappe {b.frappe_version || "—"}</span>
         </div>
         <div className="bh-chips">
-          {topApps.map((a) => <span key={a.name} className="apptag">{a.name} <b>{short(a.version) || "—"}</b>{a.branch ? <span className="apptag-branch"> {a.branch}</span> : null}</span>)}
+          {topApps.map((a) => {
+            const behind = a.latest_commit && a.version && a.latest_commit !== a.version;
+            return (
+              <span key={a.name} className={`apptag ${behind ? "apptag-behind" : ""}`} title={a.branch ? `branch: ${a.branch}` : undefined}>
+                {a.name}
+                {a.branch && <span className="apptag-branch"> {a.branch}</span>}
+                <span className="apptag-cur"> {short(a.version) || "—"}</span>
+                {behind && <span className="apptag-latest" title={`latest: ${a.latest_commit}`}> → {short(a.latest_commit)}</span>}
+              </span>
+            );
+          })}
         </div>
         <span className="bh-count">{sites.length} site{sites.length === 1 ? "" : "s"}</span>
+        <span className="sr-arrow" style={{ color: "var(--text-faint)", marginLeft: 8 }}>→</span>
       </div>
-
-      {open && (
-        <div className="bench-body">
-          <div className="bench-facts-row">
-            <div className="bf"><div className="k">Runtime</div><div className="v">{f.python_version ? `Python ${f.python_version}` : "—"}{f.node_version ? ` · Node ${f.node_version}` : ""}</div></div>
-            <div className="bf"><div className="k">Database</div><div className="v">{f.db_type || "—"}</div></div>
-            <div className="bf"><div className="k">Workers</div><div className="v">{(f.web_workers || f.rq_workers) ? `${f.web_workers ?? 0} web · ${f.rq_workers ?? 0} rq` : "—"}</div></div>
-            <div className="bf"><div className="k">Scheduler</div><div className="v">{f.scheduler_on === undefined ? "—" : f.scheduler_on ? "On" : "Off"}</div></div>
-            <div className="bf"><div className="k">Path</div><div className="v" style={{ color: "var(--text-faint)" }}>{b.path}</div></div>
-          </div>
-
-          {sites.length === 0 ? (
-            <div className="bench-empty-sites">No sites on this bench.</div>
-          ) : (
-            sites.map((s) => (
-              <div className="site-row" key={s.site_id} onClick={() => nav(`/sites/${s.site_id}`)}>
-                <span className="sr-dom">{s.site}</span>
-                <span className="sr-apps">
-                  {s.apps.length === 0 ? <span className="muted" style={{ fontSize: 12 }}>no apps</span> :
-                    s.apps.slice(0, 6).map((app) => {
-                      const cur = s.versions[app];
-                      const latest = s.latest_commits?.[app];
-                      const branch = s.branches?.[app];
-                      const behind = latest && cur && latest !== cur;
-                      return (
-                        <span key={app} className="vtag" title={branch ? `branch: ${branch}` : undefined}>
-                          {app}
-                          {branch && <span className="vtag-branch"> {branch}</span>}
-                          {cur && <span className="vtag-cur"> {short(cur)}</span>}
-                          {behind && <span className="vtag-behind" title={`latest: ${short(latest)}`}> ↑{short(latest)}</span>}
-                        </span>
-                      );
-                    })}
-                  {s.apps.length > 6 && <span className="vtag none">+{s.apps.length - 6}</span>}
-                </span>
-                <span className="sr-backup">{ago(s.last_backup)}</span>
-                <span className={`badge ${s.status === "active" ? "active" : s.status}`}>{s.status === "active" ? "Live" : s.status}</span>
-                <span className="sr-arrow">→</span>
-              </div>
-            ))
-          )}
-          {canAdmin && (
-            <div className="site-row site-row-add" onClick={onNewSite}>
-              <span className="sr-arrow" style={{ color: "var(--brand)" }}>＋</span>
-              <span style={{ color: "var(--brand)", fontWeight: 600 }}>New site on {b.name}</span>
-            </div>
-          )}
+      {canAdmin && (
+        <div className="site-row site-row-add" onClick={(e) => { e.stopPropagation(); onNewSite(); }}>
+          <span className="sr-arrow" style={{ color: "var(--brand)" }}>＋</span>
+          <span style={{ color: "var(--brand)", fontWeight: 600 }}>New site on {b.name}</span>
         </div>
       )}
     </div>

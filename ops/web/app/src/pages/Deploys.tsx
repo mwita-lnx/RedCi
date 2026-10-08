@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { apiGet, Deploy } from "../api";
@@ -216,12 +216,17 @@ export function DeploysPage() {
 }
 
 function RunGroup({ day, items }: { day: string; items: Deploy[] }) {
+  const nav = useNavigate();
   const fails = items.filter((d) => d.status === "failed" || d.status === "lost").length;
+  const openRun = (d: Deploy) => {
+    if (d.last_job_id > 0) nav(`/jobs/${d.last_job_id}`);
+    else toast.message("This run has no job yet", { description: "It hasn't started on an agent." });
+  };
   return (
     <>
       <tr className="day-group"><td colSpan={6}>{day}<span className="dg-aux">{items.length} runs{fails ? ` · ${fails} failed` : ""}</span></td></tr>
       {items.map((d) => (
-        <tr key={d.id}>
+        <tr key={d.id} className="run-row" style={{ cursor: "pointer" }} onClick={() => openRun(d)}>
           <td><Badge status={d.status === "succeeded" ? "succeeded" : d.status} /></td>
           <td>
             <div className="run-primary">{d.kind} <span className="num">#{d.id}</span></div>
@@ -230,7 +235,7 @@ function RunGroup({ day, items }: { day: string; items: Deploy[] }) {
           <td className="branch">{d.trigger}</td>
           <td><div className="stagebars">{stageBars(d.status).map((c, i) => <i key={i} className={c} />)}</div></td>
           <td className="cell-time">{hhmm(d.created_at)}</td>
-          <td className="row-actions">
+          <td className="row-actions" onClick={(e) => e.stopPropagation()}>
             {d.last_job_id > 0 && <Link className="rerun-ic" to={`/jobs/${d.last_job_id}`} title="View logs">↻</Link>}
           </td>
         </tr>

@@ -61,7 +61,7 @@ export function PanelBox({ title, action, children }: { title?: string; action?:
   );
 }
 
-export function PageHeader({ title, sub, action }: { title: string; sub?: string; action?: ReactNode }) {
+export function PageHeader({ title, sub, action }: { title: string; sub?: ReactNode; action?: ReactNode }) {
   return (
     <header className="page-header">
       <div>

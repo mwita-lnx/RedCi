@@ -1,29 +1,33 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { apiGet, apiPost, Bench } from "../api";
 import { Button, Modal } from "../ui";
 
-// Shared "New site" modal, used from the Benches & sites page. An optional
-// preselected bench is used when opening it from a specific bench.
 export function NewSiteModal({ onClose, benchId }: { onClose: () => void; benchId?: number }) {
   const qc = useQueryClient();
+  const nav = useNavigate();
   const { data: benches } = useQuery({ queryKey: ["benches"], queryFn: () => apiGet<Bench[]>("/benches") });
   const [form, setForm] = useState({
     bench_id: benchId ?? 0, domain: "", apps: "", admin_password: "",
     db_root_user: "root", db_root_password: "", le_email: "", ssl: false,
   });
   const mut = useMutation({
-    mutationFn: () => apiPost("/sites", {
+    mutationFn: () => apiPost<{ deploy_id: number }>("/sites", {
       ...form,
       bench_id: Number(form.bench_id),
       apps: form.apps.split(/[\s,]+/).filter(Boolean),
     }),
-    onSuccess: () => {
-      toast.success("Site creation queued", { description: form.domain });
+    onSuccess: (r) => {
+      toast.success("Site creation queued", {
+        description: form.domain,
+        action: r.deploy_id ? { label: "View run", onClick: () => nav(`/deploys`) } : undefined,
+      });
       qc.invalidateQueries({ queryKey: ["benches-overview"] });
       qc.invalidateQueries({ queryKey: ["deploys"] });
       onClose();
+      if (r.deploy_id) nav("/deploys");
     },
     onError: (e: Error) => toast.error("Could not create site", { description: e.message }),
   });

@@ -96,6 +96,29 @@ export interface MatrixRow {
   status: string; last_backup: number; apps: string[]; versions: Record<string, string>;
   branches: Record<string, string>; latest_commits: Record<string, string>;
 }
+export interface BenchApp {
+  name: string;
+  current_commit: string;
+  previous_commit: string;
+  app_source_id: number | null;
+  repo: string;
+  branch: string;
+  latest_commit: string;
+  kind: string;
+  auto_deploy: boolean;
+}
+export interface BenchSite {
+  id: number; domain: string; status: string; ssl: boolean; apps: string[];
+}
+export interface BenchDetail {
+  id: number; name: string; path: string;
+  server_id: number; server_name: string; server_status: string;
+  frappe_version: string; env: string;
+  apps: BenchApp[];
+  sites: BenchSite[];
+  facts: BenchFacts;
+}
+
 export interface BenchesOverview {
   benches: BenchCard[]; columns: string[]; matrix: MatrixRow[];
   backups: { site: string; at: number }[];

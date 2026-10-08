@@ -552,6 +552,9 @@ select option { background: var(--panel); }
 .bench-card .bc-apps { display: flex; flex-wrap: wrap; gap: 7px; }
 .apptag { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: 7px; padding: 5px 9px; }
 .apptag b { color: var(--text); font-weight: 600; }
+.apptag-cur { color: var(--text); font-weight: 600; }
+.apptag-latest { color: var(--brand); font-weight: 600; }
+.apptag.apptag-behind { border-color: color-mix(in srgb, var(--brand) 35%, transparent); background: color-mix(in srgb, var(--brand) 6%, var(--bg-elev)); }
 .bench-card .bc-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .bench-card .bc-fact .fk { font-size: 11px; color: var(--text-muted); }
 .bench-card .bc-fact .fv { font-size: 13px; font-weight: 550; color: var(--text); margin-top: 2px; font-family: var(--font-mono); }
@@ -739,6 +742,13 @@ select option { background: var(--panel); }
 .settings-tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--text-muted); font: inherit; font-size: 14px; font-weight: 500; padding: 10px 14px; cursor: pointer; margin-bottom: -1px; }
 .settings-tabs button:hover { color: var(--text); }
 .settings-tabs button.on { color: var(--text); border-bottom-color: var(--brand); font-weight: 600; }
+
+.bench-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border-soft); margin-bottom: 2px; }
+.bench-tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--text-muted); font: inherit; font-size: 14px; font-weight: 500; padding: 9px 16px; cursor: pointer; margin-bottom: -1px; display: flex; align-items: center; gap: 7px; }
+.bench-tabs button:hover { color: var(--text); }
+.bench-tabs button.on { color: var(--text); border-bottom-color: var(--brand); font-weight: 600; }
+.bench-tab-count { background: var(--surface-2); color: var(--text-muted); font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; }
+.bench-tabs button.on .bench-tab-count { background: color-mix(in srgb, var(--brand) 15%, transparent); color: var(--brand); }
 
 .docs { display: grid; grid-template-columns: 220px 1fr; gap: 24px; align-items: start; }
 @media (max-width: 900px) { .docs { grid-template-columns: 1fr; } }

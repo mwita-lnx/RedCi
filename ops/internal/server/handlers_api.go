@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -445,6 +446,116 @@ func (s *Server) apiBenches(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{"id": b.ID, "name": b.Name, "path": b.Path, "server_id": b.ServerID})
 	}
 	writeJSONAPI(w, http.StatusOK, out)
+}
+
+// apiBenchDetail returns a single bench with its apps (current commit, branch,
+// latest GitHub commit) and its sites.
+func (s *Server) apiBenchDetail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	b, err := s.db.ReadQ.GetBench(ctx, id)
+	if err != nil {
+		http.Error(w, "bench not found", http.StatusNotFound)
+		return
+	}
+	servers, _ := s.db.ReadQ.ListServers(ctx)
+	srvByID := map[int64]store.Server{}
+	for _, sv := range servers {
+		srvByID[sv.ID] = sv
+	}
+	sv := srvByID[b.ServerID]
+
+	allSources, _ := s.db.ReadQ.ListAppSources(ctx)
+	srcByID := map[int64]store.AppSource{}
+	for _, src := range allSources {
+		srcByID[src.ID] = src
+	}
+	hasToken := s.ghToken(ctx) != ""
+	getLatest := func(repo, branch string) string {
+		if !hasToken || !validRepo(repo) {
+			return ""
+		}
+		return s.ghLatestCommit(ctx, repo, branch)
+	}
+
+	apps, _ := s.db.ReadQ.ListFrappeAppsForBench(ctx, b.ID)
+	appOut := make([]map[string]any, 0, len(apps))
+	for _, a := range apps {
+		cur := ""
+		if a.CurrentCommit.Valid {
+			cur = a.CurrentCommit.String
+		}
+		prev := ""
+		if a.PreviousCommit.Valid {
+			prev = a.PreviousCommit.String
+		}
+		entry := map[string]any{
+			"name":            a.AppName,
+			"current_commit":  cur,
+			"previous_commit": prev,
+			"app_source_id":   nil,
+			"repo":            "",
+			"branch":          "",
+			"latest_commit":   "",
+			"kind":            "",
+			"auto_deploy":     false,
+		}
+		if a.AppSourceID.Valid {
+			if src, ok := srcByID[a.AppSourceID.Int64]; ok {
+				latest := getLatest(src.Repo, src.Branch)
+				entry["app_source_id"] = src.ID
+				entry["repo"] = src.Repo
+				entry["branch"] = src.Branch
+				entry["latest_commit"] = latest
+				entry["kind"] = src.Kind
+				entry["auto_deploy"] = src.AutoDeploy
+			}
+		}
+		appOut = append(appOut, entry)
+	}
+
+	sitesForBench, _ := s.db.ReadQ.SitesForBench(ctx, b.ID)
+	siteOut := make([]map[string]any, 0)
+	for _, st := range sitesForBench {
+		if st.Status == "archived" {
+			continue
+		}
+		var installed []string
+		_ = json.Unmarshal([]byte(st.AppsJson), &installed)
+		siteOut = append(siteOut, map[string]any{
+			"id": st.ID, "domain": st.Domain, "status": st.Status,
+			"ssl": st.SslEnabled, "apps": installed,
+		})
+	}
+
+	facts := map[string]any{}
+	_ = json.Unmarshal([]byte(b.FactsJson), &facts)
+
+	frappeVer := ""
+	for _, a := range appOut {
+		if a["name"] == "frappe" {
+			frappeVer, _ = a["current_commit"].(string)
+			break
+		}
+	}
+	if frappeVer == "" {
+		frappeVer = nullStrVal(b.FrappeVersion)
+	}
+
+	writeJSONAPI(w, http.StatusOK, map[string]any{
+		"id": b.ID, "name": b.Name, "path": b.Path,
+		"server_id": b.ServerID, "server_name": sv.Name,
+		"server_status": sv.Status,
+		"frappe_version": frappeVer,
+		"env":   benchEnvGuess(b.Name),
+		"apps":  appOut,
+		"sites": siteOut,
+		"facts": facts,
+	})
 }
 
 // --- deploys & jobs ---
@@ -916,6 +1027,7 @@ func (s *Server) registerAPIRoutes() {
 	m.HandleFunc("POST /api/v1/sites/{id}/apps/{app}/rollback", s.requireRole(auth.RoleDeployer, s.apiSiteRollback))
 	m.HandleFunc("GET /api/v1/benches", s.requireRole(auth.RoleViewer, s.apiBenches))
 	m.HandleFunc("GET /api/v1/benches/overview", s.requireRole(auth.RoleViewer, s.apiBenchesOverview))
+	m.HandleFunc("GET /api/v1/benches/{id}", s.requireRole(auth.RoleViewer, s.apiBenchDetail))
 
 	m.HandleFunc("GET /api/v1/deploys", s.requireRole(auth.RoleViewer, s.apiDeploys))
 	m.HandleFunc("GET /api/v1/jobs/{id}", s.requireRole(auth.RoleViewer, s.apiJobDetail))

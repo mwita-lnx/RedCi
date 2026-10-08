@@ -12,12 +12,9 @@ export function AppSourcesPage({ role }: { role?: string }) {
 
   return (
     <>
-      <PageHeader title="App sources" sub="GitHub repos the panel deploys from" action={canAdmin && <Button onClick={() => setShowAdd(true)}>Add source</Button>} />
-
-      {canAdmin && <GithubCard gh={gh} />}
-
-      <PanelBox>
-        {isLoading ? <TableSkeleton cols={5} /> : !data?.length ? <Empty>No app sources yet.</Empty> : (
+      <PageHeader title="App sources" sub="GitHub repos that back your Frappe apps" />
+      <PanelBox title="Sources" action={canAdmin && <Button size="sm" onClick={() => setShowAdd(true)}>Add source</Button>}>
+        {isLoading ? <TableSkeleton cols={6} /> : !data?.length ? <Empty>No app sources yet. Connect GitHub in Settings → Integrations, then add a source.</Empty> : (
           <table>
             <thead><tr><th>Name</th><th>Repo</th><th>Branch</th><th>Version</th><th>Kind</th><th>Auto-deploy</th></tr></thead>
             <tbody>
@@ -41,60 +38,6 @@ export function AppSourcesPage({ role }: { role?: string }) {
       </PanelBox>
       {showAdd && <AddSourceModal connected={!!gh?.connected} onClose={() => setShowAdd(false)} />}
     </>
-  );
-}
-
-function GithubCard({ gh }: { gh?: GithubStatus }) {
-  const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const [token, setToken] = useState("");
-  const mut = useMutation({
-    mutationFn: () => apiPost<GithubStatus>("/github/token", { token }),
-    onSuccess: (r) => {
-      toast.success(`Connected to GitHub as ${r.login}`);
-      qc.invalidateQueries({ queryKey: ["gh-status"] });
-      qc.invalidateQueries({ queryKey: ["app-sources"] });
-      setOpen(false); setToken("");
-    },
-    onError: (e: Error) => toast.error("GitHub connection failed", { description: e.message }),
-  });
-  return (
-    <PanelBox>
-      <div className="gh-card">
-        <div className="gh-left">
-          <span className="gh-ic"></span>
-          <div>
-            <div className="gh-title">GitHub</div>
-            <div className="gh-sub">
-              {gh?.connected
-                ? <><span className="gh-dot on" />Connected as <b className="on">{gh.login}</b></>
-                : <><span className="gh-dot off" />Not connected — add a token to browse repos and versions</>}
-            </div>
-          </div>
-        </div>
-        <Button variant={gh?.connected ? "secondary" : "primary"} onClick={() => setOpen(true)}>
-          {gh?.connected ? "Reconnect" : "Connect GitHub"}
-        </Button>
-      </div>
-      {open && (
-        <Modal title="Connect GitHub" description="Paste a Personal Access Token. Stored encrypted; also used by agents to clone private repos." onClose={() => setOpen(false)}>
-          <form onSubmit={(e) => { e.preventDefault(); mut.mutate(); }}>
-            <div className="modal-body">
-              <label className="field">Personal Access Token
-                <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="ghp_… or github_pat_…" className="mono" autoFocus required />
-              </label>
-              <div className="muted" style={{ fontSize: 12 }}>
-                Scopes: <b>repo</b> for private repos (classic) or <b>Contents: read</b> (fine-grained).
-              </div>
-            </div>
-            <div className="modal-foot">
-              <Button variant="ghost" type="button" onClick={() => setOpen(false)}>Cancel</Button>
-              <Button type="submit" loading={mut.isPending}>Save &amp; verify</Button>
-            </div>
-          </form>
-        </Modal>
-      )}
-    </PanelBox>
   );
 }
 
