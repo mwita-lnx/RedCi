@@ -1,55 +1,16 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiGet, apiPost, atLeast, Bench, Site } from "../api";
-import { Badge, Button, Empty, Modal, PageHeader, PanelBox, TableSkeleton } from "../ui";
+import { apiGet, apiPost, Bench } from "../api";
+import { Button, Modal } from "../ui";
 
-export function SitesPage({ role }: { role?: string }) {
-  const { data: sites, isLoading } = useQuery({ queryKey: ["sites"], queryFn: () => apiGet<Site[]>("/sites") });
-  const [showNew, setShowNew] = useState(false);
-  const canAdmin = atLeast(role ?? "", "admin");
-
-  return (
-    <>
-      <PageHeader
-        title="Sites"
-        sub="Frappe sites managed by the panel"
-        action={canAdmin && <Button onClick={() => setShowNew(true)}>New site</Button>}
-      />
-      <PanelBox>
-        {isLoading ? (
-          <TableSkeleton cols={4} />
-        ) : !sites?.length ? (
-          <Empty>No sites yet.</Empty>
-        ) : (
-          <table>
-            <thead><tr><th>Domain</th><th>Status</th><th>SSL</th><th></th></tr></thead>
-            <tbody>
-              {sites.map((s) => (
-                <tr key={s.id}>
-                  <td><Link to={`/sites/${s.id}`}>{s.domain}</Link></td>
-                  <td><Badge status={s.status} /></td>
-                  <td className="muted">{s.ssl ? "on" : "off"}</td>
-                  <td className="row-actions">
-                    <Link className="btn secondary sm" to={`/sites/${s.id}`}>View</Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </PanelBox>
-      {showNew && <NewSiteModal onClose={() => setShowNew(false)} />}
-    </>
-  );
-}
-
-function NewSiteModal({ onClose }: { onClose: () => void }) {
+// Shared "New site" modal, used from the Benches & sites page. An optional
+// preselected bench is used when opening it from a specific bench.
+export function NewSiteModal({ onClose, benchId }: { onClose: () => void; benchId?: number }) {
   const qc = useQueryClient();
   const { data: benches } = useQuery({ queryKey: ["benches"], queryFn: () => apiGet<Bench[]>("/benches") });
   const [form, setForm] = useState({
-    bench_id: 0, domain: "", apps: "", admin_password: "",
+    bench_id: benchId ?? 0, domain: "", apps: "", admin_password: "",
     db_root_user: "root", db_root_password: "", le_email: "", ssl: false,
   });
   const mut = useMutation({
@@ -60,7 +21,7 @@ function NewSiteModal({ onClose }: { onClose: () => void }) {
     }),
     onSuccess: () => {
       toast.success("Site creation queued", { description: form.domain });
-      qc.invalidateQueries({ queryKey: ["sites"] });
+      qc.invalidateQueries({ queryKey: ["benches-overview"] });
       qc.invalidateQueries({ queryKey: ["deploys"] });
       onClose();
     },

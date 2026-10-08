@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -55,7 +55,7 @@ export function PipelinesPage({ role }: { role?: string }) {
   );
 }
 
-interface EnvDraft { name: string; server_id: number; site_id: number; require_approval: boolean }
+interface EnvDraft { name: string; server_id: number; bench_id: number; site_id: number; require_approval: boolean }
 
 function NewPipelineModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
@@ -67,24 +67,18 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [appSourceId, setAppSourceId] = useState<number>(0);
   const [envs, setEnvs] = useState<EnvDraft[]>([
-    { name: "staging", server_id: 0, site_id: 0, require_approval: false },
-    { name: "production", server_id: 0, site_id: 0, require_approval: true },
+    { name: "staging", server_id: 0, bench_id: 0, site_id: 0, require_approval: false },
+    { name: "production", server_id: 0, bench_id: 0, site_id: 0, require_approval: true },
   ]);
 
-  // map site -> server via bench, to filter sites by chosen agent.
-  const siteServer = useMemo(() => {
-    const benchServer = new Map((benches ?? []).map((b) => [b.id, b.server_id]));
-    const m = new Map<number, number>();
-    for (const s of sites ?? []) m.set(s.id, benchServer.get(s.bench_id) ?? 0);
-    return m;
-  }, [benches, sites]);
-
-  const sitesForServer = (serverId: number) =>
-    (sites ?? []).filter((s) => !serverId || siteServer.get(s.id) === serverId);
+  const benchesForServer = (serverId: number) =>
+    (benches ?? []).filter((b) => !serverId || b.server_id === serverId);
+  const sitesForBench = (benchId: number) =>
+    (sites ?? []).filter((s) => !benchId || s.bench_id === benchId);
 
   const setEnv = (i: number, patch: Partial<EnvDraft>) =>
     setEnvs((prev) => prev.map((e, j) => (j === i ? { ...e, ...patch } : e)));
-  const addEnv = () => setEnvs((p) => [...p, { name: "", server_id: 0, site_id: 0, require_approval: true }]);
+  const addEnv = () => setEnvs((p) => [...p, { name: "", server_id: 0, bench_id: 0, site_id: 0, require_approval: true }]);
   const removeEnv = (i: number) => setEnvs((p) => p.filter((_, j) => j !== i));
 
   const mut = useMutation({
@@ -121,15 +115,21 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
               {envs.length > 2 && <Button variant="ghost" size="sm" onClick={() => removeEnv(i)}>Remove</Button>}
             </div>
             <label className="field">Agent / server
-              <select value={env.server_id} onChange={(e) => setEnv(i, { server_id: Number(e.target.value), site_id: 0 })}>
+              <select value={env.server_id} onChange={(e) => setEnv(i, { server_id: Number(e.target.value), bench_id: 0, site_id: 0 })}>
                 <option value={0}>Any agent</option>
                 {(servers ?? []).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.status})</option>)}
               </select>
             </label>
+            <label className="field">Bench
+              <select value={env.bench_id} onChange={(e) => setEnv(i, { bench_id: Number(e.target.value), site_id: 0 })}>
+                <option value={0}>Select a bench…</option>
+                {benchesForServer(env.server_id).map((b) => <option key={b.id} value={b.id}>{b.name} — {b.path}</option>)}
+              </select>
+            </label>
             <label className="field">Site
-              <select value={env.site_id} onChange={(e) => setEnv(i, { site_id: Number(e.target.value) })}>
-                <option value={0}>Select a site…</option>
-                {sitesForServer(env.server_id).map((s) => <option key={s.id} value={s.id}>{s.domain}</option>)}
+              <select value={env.site_id} onChange={(e) => setEnv(i, { site_id: Number(e.target.value) })} disabled={!env.bench_id}>
+                <option value={0}>{env.bench_id ? "Select a site…" : "Pick a bench first"}</option>
+                {sitesForBench(env.bench_id).map((s) => <option key={s.id} value={s.id}>{s.domain}</option>)}
               </select>
             </label>
             <label className="check"><input type="checkbox" checked={env.require_approval} onChange={(e) => setEnv(i, { require_approval: e.target.checked })} /> Require approval to promote into this env</label>

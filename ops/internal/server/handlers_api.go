@@ -254,16 +254,41 @@ func (s *Server) apiBenchesOverview(w http.ResponseWriter, r *http.Request) {
 		srvByID[sv.ID] = sv
 	}
 
+	// Pre-load all app sources so we can look up branch + latest_commit per app.
+	allSources, _ := s.db.ReadQ.ListAppSources(ctx)
+	srcByID := map[int64]store.AppSource{}
+	for _, src := range allSources {
+		srcByID[src.ID] = src
+	}
+	hasToken := s.ghToken(ctx) != ""
+	// Cache latest commits to avoid repeated GitHub calls for the same repo+branch.
+	type repoBranch struct{ repo, branch string }
+	latestCache := map[repoBranch]string{}
+	getLatest := func(repo, branch string) string {
+		if !hasToken || !validRepo(repo) {
+			return ""
+		}
+		key := repoBranch{repo, branch}
+		if v, ok := latestCache[key]; ok {
+			return v
+		}
+		v := s.ghLatestCommit(ctx, repo, branch)
+		latestCache[key] = v
+		return v
+	}
+
 	type matrixRow struct {
-		SiteID   int64             `json:"site_id"`
-		Site     string            `json:"site"`
-		BenchID  int64             `json:"bench_id"`
-		Bench    string            `json:"bench"`
-		Env      string            `json:"env"`
-		Status   string            `json:"status"`
-		Backup   int64             `json:"last_backup"`
-		Apps     []string          `json:"apps"`
-		Versions map[string]string `json:"versions"`
+		SiteID       int64             `json:"site_id"`
+		Site         string            `json:"site"`
+		BenchID      int64             `json:"bench_id"`
+		Bench        string            `json:"bench"`
+		Env          string            `json:"env"`
+		Status       string            `json:"status"`
+		Backup       int64             `json:"last_backup"`
+		Apps         []string          `json:"apps"`
+		Versions     map[string]string `json:"versions"`
+		Branches     map[string]string `json:"branches"`
+		LatestCommits map[string]string `json:"latest_commits"`
 	}
 	appSet := map[string]bool{}
 	var matrix []matrixRow
@@ -274,12 +299,21 @@ func (s *Server) apiBenchesOverview(w http.ResponseWriter, r *http.Request) {
 		sv := srvByID[b.ServerID]
 		apps, _ := s.db.ReadQ.ListFrappeAppsForBench(ctx, b.ID)
 		verByApp := map[string]string{}
+		branchByApp := map[string]string{}
+		latestByApp := map[string]string{}
 		appNames := make([]string, 0, len(apps))
 		for _, a := range apps {
 			appNames = append(appNames, a.AppName)
 			appSet[a.AppName] = true
 			if a.CurrentCommit.Valid {
 				verByApp[a.AppName] = a.CurrentCommit.String
+			}
+			// Look up the app source for branch + latest commit.
+			if a.AppSourceID.Valid {
+				if src, ok := srcByID[a.AppSourceID.Int64]; ok {
+					branchByApp[a.AppName] = src.Branch
+					latestByApp[a.AppName] = getLatest(src.Repo, src.Branch)
+				}
 			}
 		}
 		sitesForBench, _ := s.db.ReadQ.SitesForBench(ctx, b.ID)
@@ -293,13 +327,18 @@ func (s *Server) apiBenchesOverview(w http.ResponseWriter, r *http.Request) {
 			var installed []string
 			_ = json.Unmarshal([]byte(st.AppsJson), &installed)
 			rowVers := map[string]string{}
+			rowBranches := map[string]string{}
+			rowLatest := map[string]string{}
 			for _, app := range installed {
 				rowVers[app] = verByApp[app] // bench-level version (per-site not tracked separately)
+				rowBranches[app] = branchByApp[app]
+				rowLatest[app] = latestByApp[app]
 				appSet[app] = true
 			}
 			matrix = append(matrix, matrixRow{
 				SiteID: st.ID, Site: st.Domain, BenchID: b.ID, Bench: b.Name, Env: benchEnvGuess(b.Name),
 				Status: st.Status, Backup: st.LastBackupAt.Int64, Apps: installed, Versions: rowVers,
+				Branches: rowBranches, LatestCommits: rowLatest,
 			})
 			if st.LastBackupAt.Valid {
 				backups = append(backups, map[string]any{"site": st.Domain, "at": st.LastBackupAt.Int64})
@@ -320,7 +359,7 @@ func (s *Server) apiBenchesOverview(w http.ResponseWriter, r *http.Request) {
 			"frappe_version": frappeVer,
 			"env":   benchEnvGuess(b.Name),
 			"sites": activeSites,
-			"apps":  appVersionsList(appNames, verByApp),
+			"apps":  appVersionsListFull(appNames, verByApp, branchByApp, latestByApp),
 			"facts": facts,
 		})
 	}
@@ -335,10 +374,10 @@ func (s *Server) apiBenchesOverview(w http.ResponseWriter, r *http.Request) {
 	sort.SliceStable(cols, func(i, j int) bool { return appRank(cols[i]) < appRank(cols[j]) })
 
 	writeJSONAPI(w, http.StatusOK, map[string]any{
-		"benches":  benchOut,
-		"columns":  cols,
-		"matrix":   matrix,
-		"backups":  backups,
+		"benches": benchOut,
+		"columns": cols,
+		"matrix":  matrix,
+		"backups": backups,
 	})
 }
 
@@ -346,6 +385,20 @@ func appVersionsList(names []string, ver map[string]string) []map[string]string 
 	out := make([]map[string]string, 0, len(names))
 	for _, n := range names {
 		out = append(out, map[string]string{"name": n, "version": ver[n]})
+	}
+	return out
+}
+
+// appVersionsListFull extends appVersionsList with branch and latest_commit info.
+func appVersionsListFull(names []string, ver, branch, latest map[string]string) []map[string]string {
+	out := make([]map[string]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, map[string]string{
+			"name":          n,
+			"version":       ver[n],
+			"branch":        branch[n],
+			"latest_commit": latest[n],
+		})
 	}
 	return out
 }
@@ -697,12 +750,99 @@ func (s *Server) apiPipelines(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiPipelineDetail(w http.ResponseWriter, r *http.Request) {
-	p, err := s.db.ReadQ.GetPipeline(r.Context(), pathID(r))
+	ctx := r.Context()
+	p, err := s.db.ReadQ.GetPipeline(ctx, pathID(r))
 	if err != nil {
 		apiError(w, http.StatusNotFound, "pipeline not found")
 		return
 	}
-	writeJSONAPI(w, http.StatusOK, s.pipelineListJSON(r.Context(), p))
+	out := s.pipelineListJSON(ctx, p)
+	out["timeline"] = s.pipelineTimeline(ctx, p.ID)
+	writeJSONAPI(w, http.StatusOK, out)
+}
+
+// pipelineTimeline builds the "change journey": for each commit promoted into
+// this pipeline, which env nodes it reached, with the run, who, when and status.
+// Derived entirely from pipeline_promote deploys targeting the pipeline's env
+// sites — no extra schema.
+func (s *Server) pipelineTimeline(ctx context.Context, pipelineID int64) []map[string]any {
+	envs, _ := s.db.ReadQ.ListEnvsForPipeline(ctx, pipelineID)
+	// map site_id -> env name/rank for this pipeline
+	type envref struct{ name string; rank int64 }
+	siteEnv := map[int64]envref{}
+	order := make([]string, 0, len(envs))
+	for _, e := range envs {
+		siteEnv[e.SiteID] = envref{e.Name, e.Rank}
+		order = append(order, e.Name)
+	}
+
+	deploys, _ := s.db.ReadQ.ListRecentDeploys(ctx, 500)
+	// commit -> env name -> hop info
+	type hop struct {
+		Env    string `json:"env"`
+		Rank   int64  `json:"rank"`
+		Status string `json:"status"`
+		Run    int64  `json:"run"`
+		By     string `json:"by"`
+		At     int64  `json:"at"`
+	}
+	byCommit := map[string]map[string]hop{}
+	commitFirstSeen := map[string]int64{}
+	for _, d := range deploys {
+		if d.Kind != "pipeline_promote" || d.TargetType != "site" {
+			continue
+		}
+		ref, ok := siteEnv[d.TargetID]
+		if !ok {
+			continue
+		}
+		commit := d.CommitSha.String
+		if commit == "" {
+			continue
+		}
+		who := ""
+		if d.UserID.Valid {
+			if u, err := s.db.ReadQ.GetUserByID(ctx, d.UserID.Int64); err == nil {
+				who = u.Email
+			}
+		}
+		if byCommit[commit] == nil {
+			byCommit[commit] = map[string]hop{}
+			commitFirstSeen[commit] = d.CreatedAt
+		}
+		// keep the most recent deploy per (commit, env)
+		cur, exists := byCommit[commit][ref.name]
+		if !exists || d.CreatedAt > cur.At {
+			byCommit[commit][ref.name] = hop{ref.name, ref.rank, d.Status, d.LastJobID, who, d.CreatedAt}
+		}
+		if d.CreatedAt > commitFirstSeen[commit] {
+			commitFirstSeen[commit] = d.CreatedAt
+		}
+	}
+
+	out := make([]map[string]any, 0, len(byCommit))
+	for commit, hops := range byCommit {
+		row := make([]map[string]any, 0, len(order))
+		for _, name := range order {
+			if h, ok := hops[name]; ok {
+				row = append(row, map[string]any{
+					"env": h.Env, "status": h.Status, "run": h.Run, "by": h.By, "at": h.At, "reached": true,
+				})
+			} else {
+				row = append(row, map[string]any{"env": name, "reached": false})
+			}
+		}
+		out = append(out, map[string]any{
+			"commit": commit, "updated_at": commitFirstSeen[commit], "hops": row,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i]["updated_at"].(int64) > out[j]["updated_at"].(int64)
+	})
+	if len(out) > 10 {
+		out = out[:10]
+	}
+	return out
 }
 
 func (s *Server) apiPipelineCreate(w http.ResponseWriter, r *http.Request) {
@@ -782,6 +922,7 @@ func (s *Server) registerAPIRoutes() {
 
 	m.HandleFunc("GET /api/v1/servers", s.requireRole(auth.RoleViewer, s.apiServers))
 	m.HandleFunc("GET /api/v1/servers/fleet", s.requireRole(auth.RoleViewer, s.apiFleet))
+	m.HandleFunc("POST /api/v1/servers/install-command", s.requireRole(auth.RoleAdmin, s.apiInstallCommand))
 	m.HandleFunc("POST /api/v1/servers", s.requireRole(auth.RoleAdmin, s.apiServerAdd))
 	m.HandleFunc("POST /api/v1/servers/{id}/refresh", s.requireRole(auth.RoleAdmin, s.apiServerRefresh))
 	m.HandleFunc("POST /api/v1/servers/{id}/import", s.requireRole(auth.RoleAdmin, s.apiServerImport))

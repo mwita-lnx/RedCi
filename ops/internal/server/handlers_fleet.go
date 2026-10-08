@@ -2,12 +2,39 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mwita-lnx/RedCi/shared/protocol"
 )
+
+// apiInstallCommand mints a one-time enrollment token and returns the real
+// `curl … | sudo sh` install one-liner for the Fleet page. Admin only.
+func (s *Server) apiInstallCommand(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	_ = decodeJSON(w, r, &in)
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		name = fmt.Sprintf("server-%d", time.Now().Unix())
+	}
+	id, token, err := s.CreateEnrollment(r.Context(), name, name)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	base := strings.TrimRight(s.cfg.BaseURL, "/")
+	if base == "" {
+		base = "http://" + r.Host
+	}
+	cmd := fmt.Sprintf("curl -fsSL %s/agent.sh | sudo sh -s -- --token %s", base, token)
+	s.audit(r, "server.install_token", "server", id, name)
+	writeJSONAPI(w, http.StatusOK, map[string]any{"id": id, "name": name, "command": cmd, "expires_in": "1 hour"})
+}
 
 // apiFleet powers the "Servers & agents" page: per-server cards with live
 // metrics, fleet rollups, agent-version breakdown, and a derived attention list.

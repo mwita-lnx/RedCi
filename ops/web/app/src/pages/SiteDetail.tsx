@@ -74,8 +74,8 @@ export function SiteDetailPage({ role }: { role?: string }) {
           </table>
         )}
       </PanelBox>
-      <Link to="/sites" className="muted" style={{ fontSize: 13 }}>← Back to sites</Link>
-      {showDelete && <DeleteModal siteId={id!} domain={site.domain} onClose={() => setShowDelete(false)} onDone={() => nav("/sites")} />}
+      <Link to="/benches" className="muted" style={{ fontSize: 13 }}>← Back to benches & sites</Link>
+      {showDelete && <DeleteModal siteId={id!} domain={site.domain} onClose={() => setShowDelete(false)} onDone={() => nav("/benches")} />}
     </>
   );
 }

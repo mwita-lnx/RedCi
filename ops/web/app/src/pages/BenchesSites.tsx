@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet, atLeast, BenchCard, BenchesOverview, MatrixRow } from "../api";
-import { Empty, PanelBox } from "../ui";
+import { Button, Empty, PanelBox } from "../ui";
+import { NewSiteModal } from "../components/NewSiteModal";
 
 function ago(ts: number) {
   if (!ts) return "no backup";
@@ -10,6 +11,7 @@ function ago(ts: number) {
   if (s < 60) return "backup now"; if (s < 3600) return `backup ${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `backup ${Math.floor(s / 3600)}h ago`; return `backup ${Math.floor(s / 86400)}d ago`;
 }
+function short(sha: string) { return sha ? sha.slice(0, 7) : "—"; }
 type Filter = "all" | "production" | "staging" | "preview";
 type View = "list" | "grid";
 
@@ -19,6 +21,7 @@ export function BenchesSitesPage({ role }: { role?: string }) {
   });
   const [filter, setFilter] = useState<Filter>("all");
   const [view, setView] = useState<View>("list");
+  const [newSiteBench, setNewSiteBench] = useState<number | null>(null); // -1 = any bench
   const canAdmin = atLeast(role ?? "", "admin");
 
   const benches = data?.benches ?? [];
@@ -45,7 +48,7 @@ export function BenchesSitesPage({ role }: { role?: string }) {
           <div className="rt-title" style={{ fontSize: 40 }}>Every bench, every site,<br /><span style={{ color: "var(--brand)" }}>every app version.</span></div>
           <div style={{ display: "flex", gap: 10 }}>
             {canAdmin && <Link className="btn secondary" to="/servers">Connect a bench</Link>}
-            {canAdmin && <Link className="btn" to="/sites">+ New site</Link>}
+            {canAdmin && <Button onClick={() => setNewSiteBench(-1)}>+ New site</Button>}
           </div>
         </div>
       </div>
@@ -77,7 +80,9 @@ export function BenchesSitesPage({ role }: { role?: string }) {
             <div style={{ padding: 14 }}>
               <div className="bench-list">
                 {visibleBenches.map((b) => (
-                  <BenchAccordion key={b.id} b={b} sites={sitesByBench.get(b.id) ?? []} defaultOpen={visibleBenches.length <= 2} />
+                  <BenchAccordion key={b.id} b={b} sites={sitesByBench.get(b.id) ?? []}
+                    defaultOpen={visibleBenches.length <= 2}
+                    canAdmin={canAdmin} onNewSite={() => setNewSiteBench(b.id)} />
                 ))}
               </div>
             </div>
@@ -91,11 +96,17 @@ export function BenchesSitesPage({ role }: { role?: string }) {
           <BackupsPanel backups={data?.backups ?? []} />
         </div>
       </div>
+
+      {newSiteBench !== null && (
+        <NewSiteModal benchId={newSiteBench > 0 ? newSiteBench : undefined} onClose={() => setNewSiteBench(null)} />
+      )}
     </div>
   );
 }
 
-function BenchAccordion({ b, sites, defaultOpen }: { b: BenchCard; sites: MatrixRow[]; defaultOpen: boolean }) {
+function BenchAccordion({ b, sites, defaultOpen, canAdmin, onNewSite }: {
+  b: BenchCard; sites: MatrixRow[]; defaultOpen: boolean; canAdmin: boolean; onNewSite: () => void;
+}) {
   const [open, setOpen] = useState(defaultOpen);
   const nav = useNavigate();
   const f = b.facts || {};
@@ -111,7 +122,7 @@ function BenchAccordion({ b, sites, defaultOpen }: { b: BenchCard; sites: Matrix
           <span className="bh-meta">{b.env ? b.env[0].toUpperCase() + b.env.slice(1) + " · " : ""}{b.server_name} · frappe {b.frappe_version || "—"}</span>
         </div>
         <div className="bh-chips">
-          {topApps.map((a) => <span key={a.name} className="apptag">{a.name} <b>{a.version || "—"}</b></span>)}
+          {topApps.map((a) => <span key={a.name} className="apptag">{a.name} <b>{short(a.version) || "—"}</b>{a.branch ? <span className="apptag-branch"> {a.branch}</span> : null}</span>)}
         </div>
         <span className="bh-count">{sites.length} site{sites.length === 1 ? "" : "s"}</span>
       </div>
@@ -134,9 +145,20 @@ function BenchAccordion({ b, sites, defaultOpen }: { b: BenchCard; sites: Matrix
                 <span className="sr-dom">{s.site}</span>
                 <span className="sr-apps">
                   {s.apps.length === 0 ? <span className="muted" style={{ fontSize: 12 }}>no apps</span> :
-                    s.apps.slice(0, 6).map((app) => (
-                      <span key={app} className="vtag">{app}{s.versions[app] ? ` ${s.versions[app]}` : ""}</span>
-                    ))}
+                    s.apps.slice(0, 6).map((app) => {
+                      const cur = s.versions[app];
+                      const latest = s.latest_commits?.[app];
+                      const branch = s.branches?.[app];
+                      const behind = latest && cur && latest !== cur;
+                      return (
+                        <span key={app} className="vtag" title={branch ? `branch: ${branch}` : undefined}>
+                          {app}
+                          {branch && <span className="vtag-branch"> {branch}</span>}
+                          {cur && <span className="vtag-cur"> {short(cur)}</span>}
+                          {behind && <span className="vtag-behind" title={`latest: ${short(latest)}`}> ↑{short(latest)}</span>}
+                        </span>
+                      );
+                    })}
                   {s.apps.length > 6 && <span className="vtag none">+{s.apps.length - 6}</span>}
                 </span>
                 <span className="sr-backup">{ago(s.last_backup)}</span>
@@ -144,6 +166,12 @@ function BenchAccordion({ b, sites, defaultOpen }: { b: BenchCard; sites: Matrix
                 <span className="sr-arrow">→</span>
               </div>
             ))
+          )}
+          {canAdmin && (
+            <div className="site-row site-row-add" onClick={onNewSite}>
+              <span className="sr-arrow" style={{ color: "var(--brand)" }}>＋</span>
+              <span style={{ color: "var(--brand)", fontWeight: 600 }}>New site on {b.name}</span>
+            </div>
           )}
         </div>
       )}

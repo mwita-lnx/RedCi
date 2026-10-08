@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiGet, atLeast, Fleet, FleetServer } from "../api";
+import { apiGet, apiPost, atLeast, Fleet, FleetServer } from "../api";
 import { Button, Empty, PanelBox } from "../ui";
 
 function gb(mb: number) { return mb >= 1024 ? `${Math.round(mb / 1024)} GB` : `${mb} MB`; }
@@ -28,7 +28,12 @@ export function FleetPage({ role }: { role?: string }) {
   const totalCpu = data?.total_cpu ?? 0;
   const memPct = data && data.total_mem_mb ? Math.round((data.used_mem_mb / data.total_mem_mb) * 100) : 0;
 
-  const enrollCmd = "curl -fsSL https://[YOUR-REDCI-HOST]/agent.sh | sudo sh -s -- \\\n  --token rci_•••••••• --labels bench,prod";
+  const [installCmd, setInstallCmd] = useState<string>("");
+  const genCmd = useMutation({
+    mutationFn: () => apiPost<{ command: string }>("/servers/install-command", {}),
+    onSuccess: (r) => { setInstallCmd(r.command); toast.success("Install command ready (token valid 1 hour)"); },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   return (
     <div className="stack">
@@ -39,7 +44,7 @@ export function FleetPage({ role }: { role?: string }) {
             The metal behind<br /><span style={{ color: "var(--brand)" }}>every green check.</span>
           </div>
           {canAdmin && (
-            <a className="btn" href="/servers" onClick={(e) => { e.preventDefault(); toast.message("Use Servers → Add server to enroll a new agent."); }}>+ Add server</a>
+            <Button loading={genCmd.isPending} onClick={() => genCmd.mutate()}>+ Add server</Button>
           )}
         </div>
       </div>
@@ -96,12 +101,24 @@ export function FleetPage({ role }: { role?: string }) {
           <AgentVersions data={data} />
           <PanelBox title="Install an agent">
             <div className="install-box">
-              <p>Run this on any Linux server. It registers itself, detects benches, and starts picking up jobs.</p>
-              <div className="cmd">{enrollCmd}</div>
-              <Button variant="primary" style={{ width: "100%", marginTop: 12, justifyContent: "center" }}
-                onClick={() => { navigator.clipboard?.writeText(enrollCmd); toast.success("Command copied"); }}>
-                Copy command
-              </Button>
+              <p>Run this on any Linux server. It downloads the agent, registers itself, detects benches, and starts picking up jobs.</p>
+              {installCmd ? (
+                <>
+                  <div className="cmd">{installCmd}</div>
+                  <Button variant="primary" style={{ width: "100%", marginTop: 12, justifyContent: "center" }}
+                    onClick={() => { navigator.clipboard?.writeText(installCmd); toast.success("Command copied"); }}>
+                    Copy command
+                  </Button>
+                  <p style={{ marginTop: 10, color: "var(--text-faint)", fontSize: 12 }}>One-time token · expires in 1 hour · run as root.</p>
+                </>
+              ) : canAdmin ? (
+                <Button variant="primary" style={{ width: "100%", justifyContent: "center" }}
+                  loading={genCmd.isPending} onClick={() => genCmd.mutate()}>
+                  Generate install command
+                </Button>
+              ) : (
+                <p style={{ color: "var(--text-faint)", fontSize: 12.5 }}>Ask an admin to generate an install command.</p>
+              )}
             </div>
           </PanelBox>
         </div>

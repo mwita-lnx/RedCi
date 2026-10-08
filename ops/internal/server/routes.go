@@ -19,6 +19,11 @@ func (s *Server) routes() {
 	// Health check for an external uptime monitor — no auth.
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 
+	// Agent install bootstrap — public (a new server has no session; the
+	// one-time token in the piped command is the credential).
+	s.mux.HandleFunc("GET /agent.sh", s.handleAgentScript)
+	s.mux.HandleFunc("GET /agent/download/{arch}", s.handleAgentDownload)
+
 	// GitHub push webhook — the only public endpoint; HMAC-authenticated.
 	s.mux.HandleFunc("POST /webhooks/github", s.handleGithubWebhook)
 

@@ -6,6 +6,12 @@ import { apiDelete, apiGet, apiPost, atLeast, AppSource, Deploy, GhCommit, Githu
 import { Button, Modal, PanelBox } from "../ui";
 
 function shortSha(c: string) { return c ? c.slice(0, 7) : "—"; }
+function ago(ts: number) {
+  if (!ts) return "—";
+  const s = Math.floor(Date.now() / 1000 - ts);
+  if (s < 60) return "just now"; if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`; return `${Math.floor(s / 86400)}d ago`;
+}
 // Role label by position: first=Preview, last=Production, middle=Staging.
 function roleOf(i: number, n: number): "preview" | "staging" | "production" {
   if (i === n - 1) return "production";
@@ -93,6 +99,38 @@ export function PipelineDetailPage({ role }: { role?: string }) {
           </span>
         ))}
       </div>
+
+      {/* change timeline — each release's journey across the nodes */}
+      <PanelBox title="Change timeline" action={<span className="muted" style={{ fontSize: 12 }}>each release's journey through the train</span>}>
+        {!p.timeline?.length ? (
+          <div className="empty">No promotions yet. Deploy a commit into the first environment to start tracking its journey.</div>
+        ) : (
+          <div className="timeline">
+            {p.timeline.map((c) => (
+              <div className="tl-change" key={c.commit}>
+                <div className="tl-commit">
+                  <span className="sha">{c.commit.slice(0, 7)}</span>
+                  <span className="when">updated {ago(c.updated_at)}</span>
+                </div>
+                <div className="tl-hops">
+                  {c.hops.map((h, i) => (
+                    <div className="tl-hop" key={h.env}>
+                      <div className={`tl-node ${h.reached ? (h.status === "failed" ? "failed" : h.status === "running" || h.status === "queued" ? "running" : "reached") : ""}`}>
+                        <span className="tn-dot" />
+                        <span className="tn-env">{h.env}</span>
+                        {h.reached
+                          ? (h.run ? <Link className="tn-meta" to={`/jobs/${h.run}`}>run #{h.run}</Link> : <span className="tn-meta">{h.status}</span>)
+                          : <span className="tn-meta">—</span>}
+                      </div>
+                      {i < c.hops.length - 1 && <span className={`tl-conn ${c.hops[i + 1].reached ? "done" : ""}`} />}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </PanelBox>
 
       <div className="grid-2">
         {/* deploys per day */}

@@ -2,11 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { apiGet, User } from "../api";
 import { Badge, Empty, PageHeader, PanelBox, TableSkeleton } from "../ui";
 
-export function UsersPage() {
+export function UsersPage({ embedded }: { embedded?: boolean } = {}) {
   const { data, isLoading } = useQuery({ queryKey: ["users"], queryFn: () => apiGet<User[]>("/users") });
   return (
     <>
-      <PageHeader title="Users" sub="Panel operators and their roles" />
+      {!embedded && <PageHeader title="Users" sub="Panel operators and their roles" />}
       <PanelBox>
         {isLoading ? <TableSkeleton cols={3} /> : !data?.length ? <Empty>No users.</Empty> : (
           <table>

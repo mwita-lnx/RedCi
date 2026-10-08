@@ -89,11 +89,12 @@ export interface BenchFacts {
 export interface BenchCard {
   id: number; name: string; path: string; server_id: number; server_name: string;
   server_status: string; frappe_version: string; env: string; sites: number;
-  apps: { name: string; version: string }[]; facts: BenchFacts;
+  apps: { name: string; version: string; branch: string; latest_commit: string }[]; facts: BenchFacts;
 }
 export interface MatrixRow {
   site_id: number; site: string; bench_id: number; bench: string; env: string;
   status: string; last_backup: number; apps: string[]; versions: Record<string, string>;
+  branches: Record<string, string>; latest_commits: Record<string, string>;
 }
 export interface BenchesOverview {
   benches: BenchCard[]; columns: string[]; matrix: MatrixRow[];
@@ -132,9 +133,13 @@ export interface PipelineEnv {
   last_deploy_id: number; server_id: number; server_name: string;
   agent_online: boolean; status: string;
 }
+export interface TimelineHop {
+  env: string; reached: boolean; status?: string; run?: number; by?: string; at?: number;
+}
+export interface TimelineChange { commit: string; updated_at: number; hops: TimelineHop[] }
 export interface Pipeline {
   id: number; name: string; app: string; app_source_id: number;
-  created_at: number; envs: PipelineEnv[];
+  created_at: number; envs: PipelineEnv[]; timeline?: TimelineChange[];
 }
 
 // role ranking matching the Go auth.Role ladder.

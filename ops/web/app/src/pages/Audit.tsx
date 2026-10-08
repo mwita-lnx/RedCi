@@ -4,11 +4,11 @@ import { Empty, PageHeader, PanelBox, TableSkeleton } from "../ui";
 
 function when(ts: number) { return new Date(ts * 1000).toLocaleString(); }
 
-export function AuditPage() {
+export function AuditPage({ embedded }: { embedded?: boolean } = {}) {
   const { data, isLoading } = useQuery({ queryKey: ["audit"], queryFn: () => apiGet<Audit[]>("/audit") });
   return (
     <>
-      <PageHeader title="Audit log" sub="Every action, most recent first" />
+      {!embedded && <PageHeader title="Audit log" sub="Every action, most recent first" />}
       <PanelBox>
         {isLoading ? <TableSkeleton cols={4} /> : !data?.length ? <Empty>No audit entries.</Empty> : (
           <table>
