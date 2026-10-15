@@ -130,7 +130,7 @@ func (q *Queries) CreateBench(ctx context.Context, arg CreateBenchParams) (Bench
 const createFrappeApp = `-- name: CreateFrappeApp :one
 INSERT INTO frappe_apps (bench_id, app_source_id, app_name, current_commit)
 VALUES (?, ?, ?, ?)
-RETURNING id, bench_id, app_source_id, app_name, current_commit, previous_commit
+RETURNING id, bench_id, app_source_id, app_name, current_commit, previous_commit, git_commit, git_branch, git_remote
 `
 
 type CreateFrappeAppParams struct {
@@ -155,6 +155,9 @@ func (q *Queries) CreateFrappeApp(ctx context.Context, arg CreateFrappeAppParams
 		&i.AppName,
 		&i.CurrentCommit,
 		&i.PreviousCommit,
+		&i.GitCommit,
+		&i.GitBranch,
+		&i.GitRemote,
 	)
 	return i, err
 }
@@ -163,7 +166,7 @@ const createProxyRoute = `-- name: CreateProxyRoute :one
 
 INSERT INTO proxy_routes (server_id, domain, upstream, web_app_id, ssl_enabled, extra_snippet, status)
 VALUES (?, ?, ?, ?, ?, ?, 'pending')
-RETURNING id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status
+RETURNING id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json
 `
 
 type CreateProxyRouteParams struct {
@@ -197,6 +200,66 @@ func (q *Queries) CreateProxyRoute(ctx context.Context, arg CreateProxyRoutePara
 		&i.ExtraSnippet,
 		&i.ConfigHash,
 		&i.Status,
+		&i.LocationsJson,
+		&i.FrappeSite,
+		&i.StaticRoot,
+		&i.AliasesJson,
+	)
+	return i, err
+}
+
+const createProxyRouteModelB = `-- name: CreateProxyRouteModelB :one
+INSERT INTO proxy_routes (server_id, domain, upstream, web_app_id, ssl_enabled,
+                          extra_snippet, locations_json, frappe_site, static_root,
+                          aliases_json, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+RETURNING id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json
+`
+
+type CreateProxyRouteModelBParams struct {
+	ServerID      int64          `json:"server_id"`
+	Domain        string         `json:"domain"`
+	Upstream      string         `json:"upstream"`
+	WebAppID      sql.NullInt64  `json:"web_app_id"`
+	SslEnabled    int64          `json:"ssl_enabled"`
+	ExtraSnippet  sql.NullString `json:"extra_snippet"`
+	LocationsJson sql.NullString `json:"locations_json"`
+	FrappeSite    sql.NullString `json:"frappe_site"`
+	StaticRoot    sql.NullString `json:"static_root"`
+	AliasesJson   sql.NullString `json:"aliases_json"`
+}
+
+// Create a Model B (path-split) route carrying its locations/frappe_site/static/
+// aliases spec.
+func (q *Queries) CreateProxyRouteModelB(ctx context.Context, arg CreateProxyRouteModelBParams) (ProxyRoute, error) {
+	row := q.db.QueryRowContext(ctx, createProxyRouteModelB,
+		arg.ServerID,
+		arg.Domain,
+		arg.Upstream,
+		arg.WebAppID,
+		arg.SslEnabled,
+		arg.ExtraSnippet,
+		arg.LocationsJson,
+		arg.FrappeSite,
+		arg.StaticRoot,
+		arg.AliasesJson,
+	)
+	var i ProxyRoute
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Domain,
+		&i.Upstream,
+		&i.WebAppID,
+		&i.SslEnabled,
+		&i.SslExpiresAt,
+		&i.ExtraSnippet,
+		&i.ConfigHash,
+		&i.Status,
+		&i.LocationsJson,
+		&i.FrappeSite,
+		&i.StaticRoot,
+		&i.AliasesJson,
 	)
 	return i, err
 }
@@ -240,30 +303,41 @@ func (q *Queries) CreateSite(ctx context.Context, arg CreateSiteParams) (Site, e
 
 const createWebApp = `-- name: CreateWebApp :one
 
-INSERT INTO web_apps (server_id, app_source_id, name, internal_port, container_port, health_path, env_enc, status)
-VALUES (?, ?, ?, ?, ?, ?, ?, 'new')
-RETURNING id, server_id, app_source_id, name, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status
+INSERT INTO web_apps (server_id, name, runtime, repo, url, branch, auto_deploy,
+                      internal_port, container_port, health_path, dockerfile_path, env_enc, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')
+RETURNING id, server_id, app_source_id, name, runtime, repo, url, branch, auto_deploy, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status, dockerfile_path
 `
 
 type CreateWebAppParams struct {
-	ServerID      int64  `json:"server_id"`
-	AppSourceID   int64  `json:"app_source_id"`
-	Name          string `json:"name"`
-	InternalPort  int64  `json:"internal_port"`
-	ContainerPort int64  `json:"container_port"`
-	HealthPath    string `json:"health_path"`
-	EnvEnc        []byte `json:"env_enc"`
+	ServerID       int64  `json:"server_id"`
+	Name           string `json:"name"`
+	Runtime        string `json:"runtime"`
+	Repo           string `json:"repo"`
+	Url            string `json:"url"`
+	Branch         string `json:"branch"`
+	AutoDeploy     int64  `json:"auto_deploy"`
+	InternalPort   int64  `json:"internal_port"`
+	ContainerPort  int64  `json:"container_port"`
+	HealthPath     string `json:"health_path"`
+	DockerfilePath string `json:"dockerfile_path"`
+	EnvEnc         []byte `json:"env_enc"`
 }
 
 // Web apps -------------------------------------------------------------------
 func (q *Queries) CreateWebApp(ctx context.Context, arg CreateWebAppParams) (WebApp, error) {
 	row := q.db.QueryRowContext(ctx, createWebApp,
 		arg.ServerID,
-		arg.AppSourceID,
 		arg.Name,
+		arg.Runtime,
+		arg.Repo,
+		arg.Url,
+		arg.Branch,
+		arg.AutoDeploy,
 		arg.InternalPort,
 		arg.ContainerPort,
 		arg.HealthPath,
+		arg.DockerfilePath,
 		arg.EnvEnc,
 	)
 	var i WebApp
@@ -272,6 +346,11 @@ func (q *Queries) CreateWebApp(ctx context.Context, arg CreateWebAppParams) (Web
 		&i.ServerID,
 		&i.AppSourceID,
 		&i.Name,
+		&i.Runtime,
+		&i.Repo,
+		&i.Url,
+		&i.Branch,
+		&i.AutoDeploy,
 		&i.InternalPort,
 		&i.ContainerPort,
 		&i.HealthPath,
@@ -279,6 +358,7 @@ func (q *Queries) CreateWebApp(ctx context.Context, arg CreateWebAppParams) (Web
 		&i.CurrentCommit,
 		&i.PreviousCommit,
 		&i.Status,
+		&i.DockerfilePath,
 	)
 	return i, err
 }
@@ -289,6 +369,15 @@ DELETE FROM sites WHERE id = ?
 
 func (q *Queries) DeleteSiteRow(ctx context.Context, id int64) error {
 	_, err := q.db.ExecContext(ctx, deleteSiteRow, id)
+	return err
+}
+
+const deleteWebApp = `-- name: DeleteWebApp :exec
+DELETE FROM web_apps WHERE id = ?
+`
+
+func (q *Queries) DeleteWebApp(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteWebApp, id)
 	return err
 }
 
@@ -410,7 +499,7 @@ func (q *Queries) GetDeployPoint(ctx context.Context, arg GetDeployPointParams) 
 }
 
 const getProxyRoute = `-- name: GetProxyRoute :one
-SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status FROM proxy_routes WHERE id = ? LIMIT 1
+SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json FROM proxy_routes WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) GetProxyRoute(ctx context.Context, id int64) (ProxyRoute, error) {
@@ -427,6 +516,10 @@ func (q *Queries) GetProxyRoute(ctx context.Context, id int64) (ProxyRoute, erro
 		&i.ExtraSnippet,
 		&i.ConfigHash,
 		&i.Status,
+		&i.LocationsJson,
+		&i.FrappeSite,
+		&i.StaticRoot,
+		&i.AliasesJson,
 	)
 	return i, err
 }
@@ -474,7 +567,7 @@ func (q *Queries) GetSiteByDomain(ctx context.Context, domain string) (Site, err
 }
 
 const getWebApp = `-- name: GetWebApp :one
-SELECT id, server_id, app_source_id, name, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status FROM web_apps WHERE id = ? LIMIT 1
+SELECT id, server_id, app_source_id, name, runtime, repo, url, branch, auto_deploy, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status, dockerfile_path FROM web_apps WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) GetWebApp(ctx context.Context, id int64) (WebApp, error) {
@@ -485,6 +578,11 @@ func (q *Queries) GetWebApp(ctx context.Context, id int64) (WebApp, error) {
 		&i.ServerID,
 		&i.AppSourceID,
 		&i.Name,
+		&i.Runtime,
+		&i.Repo,
+		&i.Url,
+		&i.Branch,
+		&i.AutoDeploy,
 		&i.InternalPort,
 		&i.ContainerPort,
 		&i.HealthPath,
@@ -492,12 +590,13 @@ func (q *Queries) GetWebApp(ctx context.Context, id int64) (WebApp, error) {
 		&i.CurrentCommit,
 		&i.PreviousCommit,
 		&i.Status,
+		&i.DockerfilePath,
 	)
 	return i, err
 }
 
 const getWebAppByName = `-- name: GetWebAppByName :one
-SELECT id, server_id, app_source_id, name, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status FROM web_apps WHERE name = ? LIMIT 1
+SELECT id, server_id, app_source_id, name, runtime, repo, url, branch, auto_deploy, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status, dockerfile_path FROM web_apps WHERE name = ? LIMIT 1
 `
 
 func (q *Queries) GetWebAppByName(ctx context.Context, name string) (WebApp, error) {
@@ -508,6 +607,11 @@ func (q *Queries) GetWebAppByName(ctx context.Context, name string) (WebApp, err
 		&i.ServerID,
 		&i.AppSourceID,
 		&i.Name,
+		&i.Runtime,
+		&i.Repo,
+		&i.Url,
+		&i.Branch,
+		&i.AutoDeploy,
 		&i.InternalPort,
 		&i.ContainerPort,
 		&i.HealthPath,
@@ -515,6 +619,7 @@ func (q *Queries) GetWebAppByName(ctx context.Context, name string) (WebApp, err
 		&i.CurrentCommit,
 		&i.PreviousCommit,
 		&i.Status,
+		&i.DockerfilePath,
 	)
 	return i, err
 }
@@ -624,7 +729,7 @@ func (q *Queries) ListBenchesForServer(ctx context.Context, serverID int64) ([]B
 }
 
 const listFrappeAppsForBench = `-- name: ListFrappeAppsForBench :many
-SELECT id, bench_id, app_source_id, app_name, current_commit, previous_commit FROM frappe_apps WHERE bench_id = ? ORDER BY app_name
+SELECT id, bench_id, app_source_id, app_name, current_commit, previous_commit, git_commit, git_branch, git_remote FROM frappe_apps WHERE bench_id = ? ORDER BY app_name
 `
 
 func (q *Queries) ListFrappeAppsForBench(ctx context.Context, benchID int64) ([]FrappeApp, error) {
@@ -643,6 +748,9 @@ func (q *Queries) ListFrappeAppsForBench(ctx context.Context, benchID int64) ([]
 			&i.AppName,
 			&i.CurrentCommit,
 			&i.PreviousCommit,
+			&i.GitCommit,
+			&i.GitBranch,
+			&i.GitRemote,
 		); err != nil {
 			return nil, err
 		}
@@ -658,7 +766,7 @@ func (q *Queries) ListFrappeAppsForBench(ctx context.Context, benchID int64) ([]
 }
 
 const listProxyRoutes = `-- name: ListProxyRoutes :many
-SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status FROM proxy_routes ORDER BY domain
+SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json FROM proxy_routes ORDER BY domain
 `
 
 func (q *Queries) ListProxyRoutes(ctx context.Context) ([]ProxyRoute, error) {
@@ -681,6 +789,10 @@ func (q *Queries) ListProxyRoutes(ctx context.Context) ([]ProxyRoute, error) {
 			&i.ExtraSnippet,
 			&i.ConfigHash,
 			&i.Status,
+			&i.LocationsJson,
+			&i.FrappeSite,
+			&i.StaticRoot,
+			&i.AliasesJson,
 		); err != nil {
 			return nil, err
 		}
@@ -696,7 +808,7 @@ func (q *Queries) ListProxyRoutes(ctx context.Context) ([]ProxyRoute, error) {
 }
 
 const listProxyRoutesForServer = `-- name: ListProxyRoutesForServer :many
-SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status FROM proxy_routes WHERE server_id = ? ORDER BY domain
+SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json FROM proxy_routes WHERE server_id = ? ORDER BY domain
 `
 
 func (q *Queries) ListProxyRoutesForServer(ctx context.Context, serverID int64) ([]ProxyRoute, error) {
@@ -719,6 +831,10 @@ func (q *Queries) ListProxyRoutesForServer(ctx context.Context, serverID int64) 
 			&i.ExtraSnippet,
 			&i.ConfigHash,
 			&i.Status,
+			&i.LocationsJson,
+			&i.FrappeSite,
+			&i.StaticRoot,
+			&i.AliasesJson,
 		); err != nil {
 			return nil, err
 		}
@@ -771,7 +887,7 @@ func (q *Queries) ListSites(ctx context.Context) ([]Site, error) {
 }
 
 const listWebApps = `-- name: ListWebApps :many
-SELECT id, server_id, app_source_id, name, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status FROM web_apps ORDER BY name
+SELECT id, server_id, app_source_id, name, runtime, repo, url, branch, auto_deploy, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status, dockerfile_path FROM web_apps ORDER BY name
 `
 
 func (q *Queries) ListWebApps(ctx context.Context) ([]WebApp, error) {
@@ -788,6 +904,11 @@ func (q *Queries) ListWebApps(ctx context.Context) ([]WebApp, error) {
 			&i.ServerID,
 			&i.AppSourceID,
 			&i.Name,
+			&i.Runtime,
+			&i.Repo,
+			&i.Url,
+			&i.Branch,
+			&i.AutoDeploy,
 			&i.InternalPort,
 			&i.ContainerPort,
 			&i.HealthPath,
@@ -795,6 +916,7 @@ func (q *Queries) ListWebApps(ctx context.Context) ([]WebApp, error) {
 			&i.CurrentCommit,
 			&i.PreviousCommit,
 			&i.Status,
+			&i.DockerfilePath,
 		); err != nil {
 			return nil, err
 		}
@@ -888,6 +1010,32 @@ func (q *Queries) SetFrappeAppCommits(ctx context.Context, arg SetFrappeAppCommi
 	_, err := q.db.ExecContext(ctx, setFrappeAppCommits,
 		arg.PreviousCommit,
 		arg.CurrentCommit,
+		arg.BenchID,
+		arg.AppName,
+	)
+	return err
+}
+
+const setFrappeAppGit = `-- name: SetFrappeAppGit :exec
+UPDATE frappe_apps
+SET git_commit = ?, git_branch = ?, git_remote = ?
+WHERE bench_id = ? AND app_name = ?
+`
+
+type SetFrappeAppGitParams struct {
+	GitCommit sql.NullString `json:"git_commit"`
+	GitBranch sql.NullString `json:"git_branch"`
+	GitRemote sql.NullString `json:"git_remote"`
+	BenchID   int64          `json:"bench_id"`
+	AppName   string         `json:"app_name"`
+}
+
+// Store the git state the agent read off the bench's apps/<name>/.git.
+func (q *Queries) SetFrappeAppGit(ctx context.Context, arg SetFrappeAppGitParams) error {
+	_, err := q.db.ExecContext(ctx, setFrappeAppGit,
+		arg.GitCommit,
+		arg.GitBranch,
+		arg.GitRemote,
 		arg.BenchID,
 		arg.AppName,
 	)
@@ -1058,10 +1206,10 @@ func (q *Queries) UpsertDeployPoint(ctx context.Context, arg UpsertDeployPointPa
 }
 
 const webAppsForSource = `-- name: WebAppsForSource :many
-SELECT id, server_id, app_source_id, name, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status FROM web_apps WHERE app_source_id = ?
+SELECT id, server_id, app_source_id, name, runtime, repo, url, branch, auto_deploy, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status, dockerfile_path FROM web_apps WHERE app_source_id = ?
 `
 
-func (q *Queries) WebAppsForSource(ctx context.Context, appSourceID int64) ([]WebApp, error) {
+func (q *Queries) WebAppsForSource(ctx context.Context, appSourceID sql.NullInt64) ([]WebApp, error) {
 	rows, err := q.db.QueryContext(ctx, webAppsForSource, appSourceID)
 	if err != nil {
 		return nil, err
@@ -1075,6 +1223,11 @@ func (q *Queries) WebAppsForSource(ctx context.Context, appSourceID int64) ([]We
 			&i.ServerID,
 			&i.AppSourceID,
 			&i.Name,
+			&i.Runtime,
+			&i.Repo,
+			&i.Url,
+			&i.Branch,
+			&i.AutoDeploy,
 			&i.InternalPort,
 			&i.ContainerPort,
 			&i.HealthPath,
@@ -1082,6 +1235,7 @@ func (q *Queries) WebAppsForSource(ctx context.Context, appSourceID int64) ([]We
 			&i.CurrentCommit,
 			&i.PreviousCommit,
 			&i.Status,
+			&i.DockerfilePath,
 		); err != nil {
 			return nil, err
 		}

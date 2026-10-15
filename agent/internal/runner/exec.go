@@ -22,7 +22,7 @@ func (r *Runner) Exec(ctx context.Context, step jobs.Step, timeout time.Duration
 	if r.opts.DryRun {
 		return "dry-run", 0, nil
 	}
-	cmd := exec.CommandContext(ctx, step.Command, step.Args...)
+	cmd := exec.CommandContext(ctx, r.resolve(step.Command), step.Args...)
 	if step.Dir != "" {
 		cmd.Dir = step.Dir
 	}

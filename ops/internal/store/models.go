@@ -59,6 +59,9 @@ type FrappeApp struct {
 	AppName        string         `json:"app_name"`
 	CurrentCommit  sql.NullString `json:"current_commit"`
 	PreviousCommit sql.NullString `json:"previous_commit"`
+	GitCommit      sql.NullString `json:"git_commit"`
+	GitBranch      sql.NullString `json:"git_branch"`
+	GitRemote      sql.NullString `json:"git_remote"`
 }
 
 type FrappeDeployPoint struct {
@@ -90,6 +93,7 @@ type Job struct {
 	Error           sql.NullString `json:"error"`
 	ResultJson      sql.NullString `json:"result_json"`
 	CreatedAt       int64          `json:"created_at"`
+	LockKey2        sql.NullString `json:"lock_key2"`
 }
 
 type JobLog struct {
@@ -125,16 +129,20 @@ type PipelineEnv struct {
 }
 
 type ProxyRoute struct {
-	ID           int64          `json:"id"`
-	ServerID     int64          `json:"server_id"`
-	Domain       string         `json:"domain"`
-	Upstream     string         `json:"upstream"`
-	WebAppID     sql.NullInt64  `json:"web_app_id"`
-	SslEnabled   int64          `json:"ssl_enabled"`
-	SslExpiresAt sql.NullInt64  `json:"ssl_expires_at"`
-	ExtraSnippet sql.NullString `json:"extra_snippet"`
-	ConfigHash   sql.NullString `json:"config_hash"`
-	Status       string         `json:"status"`
+	ID            int64          `json:"id"`
+	ServerID      int64          `json:"server_id"`
+	Domain        string         `json:"domain"`
+	Upstream      string         `json:"upstream"`
+	WebAppID      sql.NullInt64  `json:"web_app_id"`
+	SslEnabled    int64          `json:"ssl_enabled"`
+	SslExpiresAt  sql.NullInt64  `json:"ssl_expires_at"`
+	ExtraSnippet  sql.NullString `json:"extra_snippet"`
+	ConfigHash    sql.NullString `json:"config_hash"`
+	Status        string         `json:"status"`
+	LocationsJson sql.NullString `json:"locations_json"`
+	FrappeSite    sql.NullString `json:"frappe_site"`
+	StaticRoot    sql.NullString `json:"static_root"`
+	AliasesJson   sql.NullString `json:"aliases_json"`
 }
 
 type Secret struct {
@@ -155,6 +163,7 @@ type Server struct {
 	FactsJson           sql.NullString `json:"facts_json"`
 	LastHeartbeatAt     sql.NullInt64  `json:"last_heartbeat_at"`
 	CreatedAt           int64          `json:"created_at"`
+	LastDiscoveryJson   sql.NullString `json:"last_discovery_json"`
 }
 
 type Session struct {
@@ -190,8 +199,13 @@ type User struct {
 type WebApp struct {
 	ID             int64          `json:"id"`
 	ServerID       int64          `json:"server_id"`
-	AppSourceID    int64          `json:"app_source_id"`
+	AppSourceID    sql.NullInt64  `json:"app_source_id"`
 	Name           string         `json:"name"`
+	Runtime        string         `json:"runtime"`
+	Repo           string         `json:"repo"`
+	Url            string         `json:"url"`
+	Branch         string         `json:"branch"`
+	AutoDeploy     int64          `json:"auto_deploy"`
 	InternalPort   int64          `json:"internal_port"`
 	ContainerPort  int64          `json:"container_port"`
 	HealthPath     string         `json:"health_path"`
@@ -199,6 +213,7 @@ type WebApp struct {
 	CurrentCommit  sql.NullString `json:"current_commit"`
 	PreviousCommit sql.NullString `json:"previous_commit"`
 	Status         string         `json:"status"`
+	DockerfilePath string         `json:"dockerfile_path"`
 }
 
 type WebhookDelivery struct {

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet, Job } from "../api";
 import { Badge, PanelBox } from "../ui";
+
+interface DeployJob { id: number; type: string; status: string; seq: number; }
 
 interface Line { seq: number; stream: string; line: string; ts?: number }
 type StStatus = "succeeded" | "failed" | "running" | "pending";
@@ -107,7 +109,14 @@ function maintenanceOn(lines: Line[]): string {
 
 export function JobPage() {
   const { id } = useParams();
+  const nav = useNavigate();
   const { data: job } = useQuery({ queryKey: ["job", id], queryFn: () => apiGet<Job>(`/jobs/${id}`) });
+  const deployId = job?.deploy_id;
+  const { data: siblings } = useQuery({
+    queryKey: ["deploy-jobs", deployId],
+    queryFn: () => apiGet<DeployJob[]>(`/deploys/${deployId}/jobs`),
+    enabled: !!deployId,
+  });
   const [lines, setLines] = useState<Line[]>([]);
   const [status, setStatus] = useState<string>("");
   const boxRef = useRef<HTMLDivElement>(null);
@@ -165,6 +174,21 @@ export function JobPage() {
         <span className="cur">{job?.kind ? `${job.kind} ` : ""}#{job?.deploy_id ?? id}</span>
       </div>
 
+      {siblings && siblings.length > 1 && (
+        <div className="job-siblings">
+          {siblings.map((s) => (
+            <button
+              key={s.id}
+              className={`js-btn ${s.id === Number(id) ? "active" : ""} ${s.status}`}
+              onClick={() => nav(`/jobs/${s.id}`)}
+            >
+              <span className={`js-dot ${s.status}`} />
+              {s.type}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="run-head">
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -186,35 +210,68 @@ export function JobPage() {
         </div>
       </div>
 
+      {status === "failed" && job?.error && (
+        <div className="job-error-banner">
+          <span className="jeb-ic">✕</span>
+          <div>
+            <div className="jeb-title">Job failed</div>
+            <div className="jeb-msg">{job.error}</div>
+          </div>
+        </div>
+      )}
+
       {maint && (status === "running" || status === "claimed") && (
         <div className="maint-banner">
           <span className="mb-ic">⚙</span> Maintenance mode on · <b>{maint}</b>
         </div>
       )}
 
-      {cols.length > 0 && (
-        <PanelBox>
-          <div className="dag">
-            {cols.map((c) => {
-              const cs = colStatus(c.steps);
-              return (
-                <div className="dag-col" key={c.key}>
-                  <div className="col-head">{c.key}<span className={`cdot ${cs === "succeeded" ? "ok" : cs}`} /></div>
-                  {c.steps.map((s) => (
-                    <div className={`node ${s.status}`} key={s.name}>
-                      <span className="nic">{s.status === "succeeded" ? "✓" : s.status === "failed" ? "✕" : s.status === "running" ? "•" : "–"}</span>
-                      <span className="nbody">
-                        <span className="nname">{s.name}</span>
-                        {s.dur != null && <span className="ndur">{fmtDur(s.dur)}</span>}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
+      {/* setup (stages) + logs, side by side */}
+      <div className="job-split">
+        {cols.length > 0 && (
+          <PanelBox title="Setup">
+            <div className="dag dag-vert">
+              {cols.map((c) => {
+                const cs = colStatus(c.steps);
+                return (
+                  <div className="dag-col" key={c.key}>
+                    <div className="col-head">{c.key}<span className={`cdot ${cs === "succeeded" ? "ok" : cs}`} /></div>
+                    {c.steps.map((s) => (
+                      <div className={`node ${s.status}`} key={s.name}>
+                        <span className="nic">{s.status === "succeeded" ? "✓" : s.status === "failed" ? "✕" : s.status === "running" ? "•" : "–"}</span>
+                        <span className="nbody">
+                          <span className="nname">{s.name}</span>
+                          {s.dur != null && <span className="ndur">{fmtDur(s.dur)}</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </PanelBox>
+        )}
+
+        {/* log viewer */}
+        <div className="logview">
+          <div className="lv-head">
+            <div className="lv-title">
+              {status === "failed" ? <span className="x">✕</span> : null}
+              <b>{steps.find((s) => s.status === "failed")?.name ?? "Logs"}</b>
+              <span className="lv-meta">{total != null ? fmtDur(total) : ""} · {runnerLabel}</span>
+            </div>
           </div>
-        </PanelBox>
-      )}
+          <div className="logrows" ref={boxRef}>
+            {lines.length === 0 ? <div className="lr"><span className="ln">·</span><span className="lt" style={{ color: "var(--ok)" }}>waiting for output…</span></div> :
+              lines.map((l, i) => (
+                <div key={l.seq} className={`lr ${l.stream}`}>
+                  <span className="ln">{i + 1}</span>
+                  <span className="lt">{l.line}</span>
+                </div>
+              ))}
+          </div>
+        </div>
+      </div>
 
       {patches.length > 0 && (
         <PanelBox title="Patches" action={<span className="patch-count">{patchesDone}<span className="muted">/{patches.length}</span></span>}>
@@ -235,58 +292,35 @@ export function JobPage() {
         </PanelBox>
       )}
 
-      <div className="grid-2">
-        {/* log viewer */}
-        <div className="logview">
-          <div className="lv-head">
-            <div className="lv-title">
-              {status === "failed" ? <span className="x">✕</span> : null}
-              <b>{steps.find((s) => s.status === "failed")?.name ?? "Logs"}</b>
-              <span className="lv-meta">{total != null ? fmtDur(total) : ""} · {runnerLabel}</span>
-            </div>
+      <div className="job-info-row">
+        <PanelBox>
+          <div className="why">
+            <div className="why-tag">✦ why it failed</div>
+            {job?.error ? (
+              <>
+                <h3>The run failed during “{steps.find((s) => s.status === "failed")?.name ?? "a step"}”.</h3>
+                <p>{job.error}</p>
+              </>
+            ) : (
+              <>
+                <h3>{status === "succeeded" ? "This run completed successfully." : "Run in progress…"}</h3>
+                <p className="muted">No failure recorded.</p>
+              </>
+            )}
           </div>
-          <div className="logrows" ref={boxRef}>
-            {lines.length === 0 ? <div className="lr"><span className="ln">·</span><span className="lt" style={{ color: "var(--ok)" }}>waiting for output…</span></div> :
-              lines.map((l, i) => (
-                <div key={l.seq} className={`lr ${l.stream}`}>
-                  <span className="ln">{i + 1}</span>
-                  <span className="lt">{l.line}</span>
-                </div>
-              ))}
+        </PanelBox>
+
+        <PanelBox title="Tests">
+          <div className="muted" style={{ padding: "8px 18px 16px", fontSize: 13 }}>
+            No test telemetry wired yet. Steps: {steps.length} · failed: {steps.filter((s) => s.status === "failed").length}.
           </div>
-        </div>
+        </PanelBox>
 
-        {/* side panels */}
-        <div className="stack">
-          <PanelBox>
-            <div className="why">
-              <div className="why-tag">✦ why it failed</div>
-              {job?.error ? (
-                <>
-                  <h3>The run failed during “{steps.find((s) => s.status === "failed")?.name ?? "a step"}”.</h3>
-                  <p>{job.error}</p>
-                </>
-              ) : (
-                <>
-                  <h3>{status === "succeeded" ? "This run completed successfully." : "Run in progress…"}</h3>
-                  <p className="muted">No failure recorded.</p>
-                </>
-              )}
-            </div>
-          </PanelBox>
-
-          <PanelBox title="Tests">
-            <div className="muted" style={{ padding: "8px 18px 16px", fontSize: 13 }}>
-              No test telemetry wired yet. Steps: {steps.length} · failed: {steps.filter((s) => s.status === "failed").length}.
-            </div>
-          </PanelBox>
-
-          <PanelBox title="Artifacts">
-            <div className="muted" style={{ padding: "8px 18px 16px", fontSize: 13 }}>
-              No artifact store configured.
-            </div>
-          </PanelBox>
-        </div>
+        <PanelBox title="Artifacts">
+          <div className="muted" style={{ padding: "8px 18px 16px", fontSize: 13 }}>
+            No artifact store configured.
+          </div>
+        </PanelBox>
       </div>
 
       <Link to="/deploys" className="muted" style={{ fontSize: 13 }}>← Back to runs</Link>

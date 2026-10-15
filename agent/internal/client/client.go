@@ -128,6 +128,19 @@ func (c *Client) Heartbeat(ctx context.Context, req protocol.HeartbeatRequest) (
 	return out, nil
 }
 
+// SendDiscovery pushes a file-only bench/site discovery payload so the panel
+// can reconcile without an operator-triggered server_status job.
+func (c *Client) SendDiscovery(ctx context.Context, req protocol.DiscoveryRequest) error {
+	code, err := c.do(ctx, http.MethodPost, "/agent/v1/discovery", req, nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusOK {
+		return fmt.Errorf("discovery: panel returned %d", code)
+	}
+	return nil
+}
+
 // NextJob long-polls for a job. ok is false when the poll returned 204 (idle).
 func (c *Client) NextJob(ctx context.Context) (protocol.Job, bool, error) {
 	var out protocol.Job

@@ -20,9 +20,9 @@ func (s *Server) handleServers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServerRefresh(w http.ResponseWriter, r *http.Request) {
-	user, _ := userFrom(r.Context())
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if _, err := s.RunServerStatus(r.Context(), id, user.ID); err != nil {
+	// Agent pushes discovery automatically; Refresh re-imports the latest push.
+	if _, _, err := s.ImportDiscovered(r.Context(), id); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -106,7 +106,6 @@ func (s *Server) handleNewSiteSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSiteRefresh(w http.ResponseWriter, r *http.Request) {
-	user, _ := userFrom(r.Context())
 	site, err := s.db.ReadQ.GetSite(r.Context(), pathID(r))
 	if err != nil {
 		http.NotFound(w, r)
@@ -117,12 +116,12 @@ func (s *Server) handleSiteRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := s.RunServerStatus(r.Context(), bench.ServerID, user.ID); err != nil {
+	if _, _, err := s.ImportDiscovered(r.Context(), bench.ServerID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	s.audit(r, "site.refresh", "site", site.ID, site.Domain)
-	http.Redirect(w, r, "/deploys", http.StatusSeeOther)
+	http.Redirect(w, r, "/benches", http.StatusSeeOther)
 }
 
 func (s *Server) handleSiteAppRollback(w http.ResponseWriter, r *http.Request) {

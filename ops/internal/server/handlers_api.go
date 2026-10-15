@@ -12,6 +12,7 @@ import (
 
 	"github.com/mwita-lnx/RedCi/ops/internal/auth"
 	"github.com/mwita-lnx/RedCi/ops/internal/store"
+	"github.com/mwita-lnx/RedCi/shared/jobs"
 )
 
 // This file exposes a JSON API under /api/v1 consumed by the React SPA. It
@@ -104,26 +105,48 @@ func (s *Server) apiSiteDetail(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal([]byte(site.AppsJson), &installedApps)
 
 	frappeApps, _ := s.db.ReadQ.ListFrappeAppsForBench(ctx, site.BenchID)
-	verMap := map[string]string{}
+	gitMap := map[string]store.FrappeApp{}
 	for _, fa := range frappeApps {
-		if fa.CurrentCommit.Valid {
-			verMap[fa.AppName] = fa.CurrentCommit.String
-		}
+		gitMap[fa.AppName] = fa
 	}
 	type appInfo struct {
-		Name       string `json:"name"`
-		Version    string `json:"version"`
-		Rollbackable bool `json:"rollbackable"`
+		Name         string `json:"name"`
+		Version      string `json:"version"`       // __version__ string from disk
+		Branch       string `json:"branch"`        // checked-out git branch on the bench
+		BenchCommit  string `json:"bench_commit"`  // HEAD commit SHA on the bench
+		RemoteCommit string `json:"remote_commit"` // latest commit on the branch's remote
+		Repo         string `json:"repo"`          // owner/repo of the remote
+		UpToDate     bool   `json:"up_to_date"`    // bench HEAD == remote latest
+		Rollbackable bool   `json:"rollbackable"`
 	}
 	apps := make([]appInfo, 0, len(installedApps))
 	for _, name := range installedApps {
-		rb := false
+		fa := gitMap[name]
+		ai := appInfo{Name: name}
+		if fa.CurrentCommit.Valid {
+			ai.Version = fa.CurrentCommit.String
+		}
+		if fa.GitBranch.Valid {
+			ai.Branch = fa.GitBranch.String
+		}
+		if fa.GitCommit.Valid {
+			ai.BenchCommit = fa.GitCommit.String
+		}
+		if fa.GitRemote.Valid {
+			ai.Repo = fa.GitRemote.String
+		}
+		// Latest commit on the remote branch (best-effort; needs a GitHub token
+		// and a github.com remote). Empty when unavailable.
+		if ai.Repo != "" && ai.Branch != "" {
+			ai.RemoteCommit = s.ghLatestCommit(ctx, ai.Repo, ai.Branch)
+		}
+		ai.UpToDate = ai.BenchCommit != "" && ai.BenchCommit == ai.RemoteCommit
 		if _, err := s.db.ReadQ.GetDeployPoint(ctx, store.GetDeployPointParams{
 			BenchID: site.BenchID, AppName: name,
 		}); err == nil {
-			rb = true
+			ai.Rollbackable = true
 		}
-		apps = append(apps, appInfo{Name: name, Version: verMap[name], Rollbackable: rb})
+		apps = append(apps, ai)
 	}
 	resp := siteJSON(site)
 	resp["apps"] = apps
@@ -207,7 +230,6 @@ func (s *Server) apiSiteBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiSiteRefresh(w http.ResponseWriter, r *http.Request) {
-	user, _ := userFrom(r.Context())
 	site, err := s.db.ReadQ.GetSite(r.Context(), pathID(r))
 	if err != nil {
 		apiError(w, http.StatusNotFound, "site not found")
@@ -218,13 +240,13 @@ func (s *Server) apiSiteRefresh(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	depID, err := s.RunServerStatus(r.Context(), bench.ServerID, user.ID)
+	b, si, err := s.ImportDiscovered(r.Context(), bench.ServerID)
 	if err != nil {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.audit(r, "site.refresh", "site", site.ID, site.Domain)
-	writeJSONAPI(w, http.StatusAccepted, map[string]any{"deploy_id": depID})
+	writeJSONAPI(w, http.StatusOK, map[string]any{"benches": b, "sites": si})
 }
 
 func (s *Server) apiSiteRollback(w http.ResponseWriter, r *http.Request) {
@@ -241,6 +263,102 @@ func (s *Server) apiSiteRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "app.rollback", "bench", site.BenchID, app)
+	writeJSONAPI(w, http.StatusAccepted, map[string]any{"deploy_id": depID})
+}
+
+// apiBenchAppUpdate updates one app on a bench to a target commit (or latest).
+// Body: { "commit"?: string, "has_package_json"?: bool, "maintenance"?: bool,
+//         "skip_failing_patches"?: bool }.
+func (s *Server) apiBenchAppUpdate(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	benchID := pathID(r)
+	app := r.PathValue("app")
+	var in struct {
+		Commit             string `json:"commit"`
+		HasPackageJSON     bool   `json:"has_package_json"`
+		Maintenance        bool   `json:"maintenance"`
+		SkipFailingPatches bool   `json:"skip_failing_patches"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	depID, err := s.UpdateFrappeApp(r.Context(), benchID, app, in.Commit,
+		in.HasPackageJSON, in.Maintenance, in.SkipFailingPatches, user.ID)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit(r, "app.update", "bench", benchID, app)
+	writeJSONAPI(w, http.StatusAccepted, map[string]any{"deploy_id": depID})
+}
+
+// apiBenchAppInstall installs one or more apps onto one or more sites on a
+// bench. Apps already present on the bench are installed from the existing
+// checkout (no re-fetch); apps not yet on the bench are fetched first via a
+// repo (owner/name) or a full git URL.
+// Body: {
+//   "site_ids": [number],
+//   "apps": [{ "app": string, "repo"?: string, "url"?: string, "branch"?: string }]
+// }
+func (s *Server) apiBenchAppInstall(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	benchID := pathID(r)
+	if _, err := s.db.ReadQ.GetBench(r.Context(), benchID); err != nil {
+		apiError(w, http.StatusNotFound, "bench not found")
+		return
+	}
+	var in struct {
+		SiteIDs []int64 `json:"site_ids"`
+		Apps    []struct {
+			App    string `json:"app"`
+			Repo   string `json:"repo"`
+			URL    string `json:"url"`
+			Branch string `json:"branch"`
+		} `json:"apps"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	specs := make([]InstallAppSpec, 0, len(in.Apps))
+	for _, a := range in.Apps {
+		specs = append(specs, InstallAppSpec{App: a.App, Repo: a.Repo, URL: a.URL, Branch: a.Branch})
+	}
+	depID, skipped, err := s.InstallFrappeApp(r.Context(), benchID, in.SiteIDs, specs, user.ID)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	names := make([]string, 0, len(specs))
+	for _, a := range specs {
+		names = append(names, a.App)
+	}
+	s.audit(r, "app.install", "bench", benchID, strings.Join(names, ","))
+	writeJSONAPI(w, http.StatusAccepted, map[string]any{
+		"deploy_id":     depID,
+		"skipped_fetch": skipped, // apps already on the bench: source ignored, installed from existing checkout
+	})
+}
+
+// apiSiteAppUninstall removes an app from one site. Body: { "force"?: bool }.
+func (s *Server) apiSiteAppUninstall(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	site, err := s.db.ReadQ.GetSite(r.Context(), pathID(r))
+	if err != nil {
+		apiError(w, http.StatusNotFound, "site not found")
+		return
+	}
+	app := r.PathValue("app")
+	var in struct {
+		Force bool `json:"force"`
+	}
+	// Body is optional; ignore decode errors on an empty body.
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	depID, err := s.UninstallFrappeApp(r.Context(), site.ID, app, in.Force, user.ID)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit(r, "app.uninstall", "site", site.ID, app)
 	writeJSONAPI(w, http.StatusAccepted, map[string]any{"deploy_id": depID})
 }
 
@@ -493,27 +611,54 @@ func (s *Server) apiBenchDetail(w http.ResponseWriter, r *http.Request) {
 		if a.PreviousCommit.Valid {
 			prev = a.PreviousCommit.String
 		}
+		// Prefer the git state the agent read off apps/<name>/.git (branch, HEAD
+		// commit, remote owner/repo) — this is populated for EVERY app on the
+		// bench, not just ones linked to an app source. The linked source only
+		// overrides when the agent couldn't read git (e.g. no .git on disk).
+		branch, repo := "", ""
+		if a.GitBranch.Valid {
+			branch = a.GitBranch.String
+		}
+		if a.GitRemote.Valid {
+			repo = a.GitRemote.String
+		}
+		benchCommit := ""
+		if a.GitCommit.Valid {
+			benchCommit = a.GitCommit.String
+		}
 		entry := map[string]any{
 			"name":            a.AppName,
 			"current_commit":  cur,
 			"previous_commit": prev,
+			"bench_commit":    benchCommit, // real git HEAD SHA
 			"app_source_id":   nil,
-			"repo":            "",
-			"branch":          "",
+			"repo":            repo,
+			"branch":          branch,
 			"latest_commit":   "",
-			"kind":            "",
+			"kind":            "frappe",
 			"auto_deploy":     false,
 		}
 		if a.AppSourceID.Valid {
 			if src, ok := srcByID[a.AppSourceID.Int64]; ok {
-				latest := getLatest(src.Repo, src.Branch)
 				entry["app_source_id"] = src.ID
-				entry["repo"] = src.Repo
-				entry["branch"] = src.Branch
-				entry["latest_commit"] = latest
 				entry["kind"] = src.Kind
 				entry["auto_deploy"] = src.AutoDeploy
+				// A linked source is authoritative for repo/branch only when git
+				// discovery left them blank.
+				if repo == "" {
+					repo = src.Repo
+					entry["repo"] = src.Repo
+				}
+				if branch == "" {
+					branch = src.Branch
+					entry["branch"] = src.Branch
+				}
 			}
+		}
+		// Resolve the remote's latest commit from whatever repo+branch we have,
+		// regardless of whether a source is linked (mirrors SiteDetail).
+		if repo != "" && branch != "" {
+			entry["latest_commit"] = getLatest(repo, branch)
 		}
 		appOut = append(appOut, entry)
 	}
@@ -583,6 +728,24 @@ func (s *Server) apiDeploys(w http.ResponseWriter, r *http.Request) {
 	writeJSONAPI(w, http.StatusOK, out)
 }
 
+func (s *Server) apiDeployJobs(w http.ResponseWriter, r *http.Request) {
+	jobs, err := s.db.ReadQ.ListJobsForDeploy(r.Context(), nullInt(pathID(r)))
+	if err != nil {
+		apiError(w, http.StatusNotFound, "deploy not found")
+		return
+	}
+	out := make([]any, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, map[string]any{
+			"id":     j.ID,
+			"type":   j.Type,
+			"status": j.Status,
+			"seq":    j.Seq,
+		})
+	}
+	writeJSONAPI(w, http.StatusOK, out)
+}
+
 func (s *Server) apiJobDetail(w http.ResponseWriter, r *http.Request) {
 	job, err := s.db.ReadQ.GetJob(r.Context(), pathID(r))
 	if err != nil {
@@ -641,14 +804,23 @@ func (s *Server) apiServers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiServerRefresh(w http.ResponseWriter, r *http.Request) {
-	user, _ := userFrom(r.Context())
 	id := pathID(r)
-	if _, err := s.RunServerStatus(r.Context(), id, user.ID); err != nil {
+	// Discovery is pushed automatically by the agent; Refresh re-imports the
+	// most recent push immediately rather than waiting for the next cycle.
+	b, si, err := s.ImportDiscovered(r.Context(), id)
+	if err != nil {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.audit(r, "server.refresh", "server", id, "")
-	writeJSONAPI(w, http.StatusAccepted, map[string]any{"ok": true})
+	writeJSONAPI(w, http.StatusOK, map[string]any{"benches": b, "sites": si})
+}
+
+// apiServerHeartbeats returns the recent in-memory heartbeat payloads for a
+// server, newest first, so the UI can show them live as they arrive.
+func (s *Server) apiServerHeartbeats(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	writeJSONAPI(w, http.StatusOK, map[string]any{"heartbeats": s.recentHeartbeats(id)})
 }
 
 func (s *Server) apiServerImport(w http.ResponseWriter, r *http.Request) {
@@ -730,30 +902,216 @@ func (s *Server) apiAppSourceAdd(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiWebApps(w http.ResponseWriter, r *http.Request) {
 	apps, _ := s.db.ReadQ.ListWebApps(r.Context())
+	servers, _ := s.db.ReadQ.ListServers(r.Context())
+	srvName := map[int64]string{}
+	for _, sv := range servers {
+		srvName[sv.ID] = sv.Name
+	}
 	out := make([]any, 0, len(apps))
 	for _, a := range apps {
-		commit := ""
+		commit, prev := "", ""
 		if a.CurrentCommit.Valid {
 			commit = a.CurrentCommit.String
 		}
+		if a.PreviousCommit.Valid {
+			prev = a.PreviousCommit.String
+		}
+		source := a.Repo
+		if source == "" {
+			source = a.Url
+		}
 		out = append(out, map[string]any{
-			"id": a.ID, "name": a.Name, "internal_port": a.InternalPort,
-			"status": a.Status, "commit": commit,
+			"id": a.ID, "name": a.Name, "runtime": a.Runtime,
+			"server_id": a.ServerID, "server_name": srvName[a.ServerID],
+			"repo": a.Repo, "url": a.Url, "branch": a.Branch, "source": source,
+			"internal_port": a.InternalPort, "container_port": a.ContainerPort,
+			"health_path": a.HealthPath, "dockerfile_path": a.DockerfilePath, "auto_deploy": a.AutoDeploy != 0,
+			"status": a.Status, "commit": commit, "previous_commit": prev,
 		})
 	}
 	writeJSONAPI(w, http.StatusOK, out)
+}
+
+// apiWebAppCreate creates a web app and immediately enqueues its first deploy.
+func (s *Server) apiWebAppCreate(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	var in struct {
+		ServerID      int64  `json:"server_id"`
+		Name          string `json:"name"`
+		Runtime       string `json:"runtime"`
+		Repo          string `json:"repo"`
+		URL           string `json:"url"`
+		Branch        string `json:"branch"`
+		Commit        string `json:"commit"`
+		InternalPort   int    `json:"internal_port"`
+		ContainerPort  int    `json:"container_port"`
+		HealthPath     string `json:"health_path"`
+		DockerfilePath string `json:"dockerfile_path"`
+		StartCommand   string `json:"start_command"`
+		BuildCommand   string `json:"build_command"`
+		AutoDeploy     bool   `json:"auto_deploy"`
+		Env            string `json:"env"`
+		Deploy         bool   `json:"deploy"` // deploy immediately after create
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	id, err := s.CreateWebApp(r.Context(), WebAppSpec{
+		ServerID: in.ServerID, Name: in.Name, Runtime: in.Runtime,
+		Repo: in.Repo, URL: in.URL, Branch: in.Branch,
+		InternalPort: in.InternalPort, ContainerPort: in.ContainerPort, HealthPath: in.HealthPath,
+		DockerfilePath: in.DockerfilePath,
+		StartCommand:   in.StartCommand, BuildCommand: in.BuildCommand, AutoDeploy: in.AutoDeploy, Env: in.Env,
+	})
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit(r, "web_app.create", "web_app", id, in.Name)
+	resp := map[string]any{"id": id}
+	if in.Deploy {
+		depID, derr := s.DeployWebApp(r.Context(), id, in.Commit, in.StartCommand, in.BuildCommand, user.ID)
+		if derr != nil {
+			resp["deploy_error"] = derr.Error()
+		} else {
+			resp["deploy_id"] = depID
+		}
+	}
+	writeJSONAPI(w, http.StatusAccepted, resp)
+}
+
+// apiWebAppDeploy enqueues a deploy for an existing web app.
+func (s *Server) apiWebAppDeploy(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	var in struct {
+		Commit       string `json:"commit"`
+		StartCommand string `json:"start_command"`
+		BuildCommand string `json:"build_command"`
+	}
+	_ = decodeJSON(w, r, &in)
+	depID, err := s.DeployWebApp(r.Context(), pathID(r), in.Commit, in.StartCommand, in.BuildCommand, user.ID)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit(r, "web_app.deploy", "web_app", pathID(r), in.Commit)
+	writeJSONAPI(w, http.StatusAccepted, map[string]any{"deploy_id": depID})
+}
+
+// apiWebAppRollback enqueues a rollback to the web app's previous commit.
+func (s *Server) apiWebAppRollback(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	depID, err := s.RollbackWebApp(r.Context(), pathID(r), user.ID)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit(r, "web_app.rollback", "web_app", pathID(r), "")
+	writeJSONAPI(w, http.StatusAccepted, map[string]any{"deploy_id": depID})
+}
+
+// apiWebAppDelete removes a web app record + its env secret.
+func (s *Server) apiWebAppDelete(w http.ResponseWriter, r *http.Request) {
+	if err := s.DeleteWebApp(r.Context(), pathID(r)); err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit(r, "web_app.delete", "web_app", pathID(r), "")
+	writeJSONAPI(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// routeJSON renders a proxy route for the API, decoding the Model B spec.
+func routeJSON(rt store.ProxyRoute) map[string]any {
+	var locs []jobs.RouteLocation
+	if rt.LocationsJson.Valid && rt.LocationsJson.String != "" {
+		_ = json.Unmarshal([]byte(rt.LocationsJson.String), &locs)
+	}
+	var aliases []string
+	if rt.AliasesJson.Valid && rt.AliasesJson.String != "" {
+		_ = json.Unmarshal([]byte(rt.AliasesJson.String), &aliases)
+	}
+	kind := "proxy"
+	if len(locs) > 0 {
+		kind = "frontend-split"
+	}
+	return map[string]any{
+		"id": rt.ID, "domain": rt.Domain, "upstream": rt.Upstream,
+		"ssl": rt.SslEnabled != 0, "status": rt.Status,
+		"kind": kind, "locations": locs, "aliases": aliases,
+		"frappe_site": nullStrVal(rt.FrappeSite),
+		"static_root": nullStrVal(rt.StaticRoot),
+		"snippet":     nullStrVal(rt.ExtraSnippet),
+		"config_hash": nullStrVal(rt.ConfigHash),
+		"server_id":   rt.ServerID,
+	}
 }
 
 func (s *Server) apiRoutes(w http.ResponseWriter, r *http.Request) {
 	routes, _ := s.db.ReadQ.ListProxyRoutes(r.Context())
 	out := make([]any, 0, len(routes))
 	for _, rt := range routes {
-		out = append(out, map[string]any{
-			"id": rt.ID, "domain": rt.Domain, "upstream": rt.Upstream,
-			"ssl": rt.SslEnabled != 0, "status": rt.Status,
-		})
+		out = append(out, routeJSON(rt))
 	}
 	writeJSONAPI(w, http.StatusOK, out)
+}
+
+func (s *Server) apiRouteDetail(w http.ResponseWriter, r *http.Request) {
+	rt, err := s.db.ReadQ.GetProxyRoute(r.Context(), pathID(r))
+	if err != nil {
+		apiError(w, http.StatusNotFound, "route not found")
+		return
+	}
+	out := routeJSON(rt)
+	// Render the exact nginx config the agent would write for this route, so the
+	// UI can show the source of truth. HTTP2On defaults to true (nginx 1.25+);
+	// the agent re-renders with the host's detected version at apply time.
+	p := writeRouteParams(rt, nullStrVal(rt.ExtraSnippet), rt.SslEnabled != 0)
+	if cfg, err := jobs.RenderRoute(jobs.RouteData{
+		ID: rt.ID, Domain: p.Domain, Aliases: p.Aliases, Upstream: p.Upstream,
+		SSL: p.SSL, Snippet: p.Snippet, HTTP2On: true,
+		FrappeSite: p.FrappeSite, StaticRoot: p.StaticRoot, Locations: p.Locations,
+	}); err == nil {
+		out["config"] = cfg
+	}
+	writeJSONAPI(w, http.StatusOK, out)
+}
+
+// apiRouteCreate creates a proxy route (simple or Model B path-split). Body:
+//
+//	{server_id, domain, ssl, snippet, upstream,          // simple mode
+//	 frappe_site, static_root, aliases[], locations[]}    // Model B mode
+func (s *Server) apiRouteCreate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ServerID   int64                `json:"server_id"`
+		Domain     string               `json:"domain"`
+		Upstream   string               `json:"upstream"`
+		SSL        bool                 `json:"ssl"`
+		Snippet    string               `json:"snippet"`
+		FrappeSite string               `json:"frappe_site"`
+		StaticRoot string               `json:"static_root"`
+		Aliases    []string             `json:"aliases"`
+		Locations  []jobs.RouteLocation `json:"locations"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	p := jobs.WriteProxyRouteParams{
+		Domain:     strings.TrimSpace(in.Domain),
+		Upstream:   strings.TrimSpace(in.Upstream),
+		SSL:        in.SSL,
+		Snippet:    in.Snippet,
+		FrappeSite: strings.TrimSpace(in.FrappeSite),
+		StaticRoot: strings.TrimSpace(in.StaticRoot),
+		Aliases:    in.Aliases,
+		Locations:  in.Locations,
+	}
+	id, err := s.CreateRoute(r.Context(), in.ServerID, p)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit(r, "route.create", "route", id, in.Domain)
+	writeJSONAPI(w, http.StatusCreated, map[string]any{"id": id})
 }
 
 func (s *Server) apiRouteApply(w http.ResponseWriter, r *http.Request) {
@@ -1025,11 +1383,15 @@ func (s *Server) registerAPIRoutes() {
 	m.HandleFunc("POST /api/v1/sites/{id}/backup", s.requireRole(auth.RoleDeployer, s.apiSiteBackup))
 	m.HandleFunc("POST /api/v1/sites/{id}/refresh", s.requireRole(auth.RoleAdmin, s.apiSiteRefresh))
 	m.HandleFunc("POST /api/v1/sites/{id}/apps/{app}/rollback", s.requireRole(auth.RoleDeployer, s.apiSiteRollback))
+	m.HandleFunc("POST /api/v1/benches/{id}/apps/install", s.requireRole(auth.RoleDeployer, s.apiBenchAppInstall))
+	m.HandleFunc("POST /api/v1/sites/{id}/apps/{app}/uninstall", s.requireRole(auth.RoleDeployer, s.apiSiteAppUninstall))
 	m.HandleFunc("GET /api/v1/benches", s.requireRole(auth.RoleViewer, s.apiBenches))
 	m.HandleFunc("GET /api/v1/benches/overview", s.requireRole(auth.RoleViewer, s.apiBenchesOverview))
 	m.HandleFunc("GET /api/v1/benches/{id}", s.requireRole(auth.RoleViewer, s.apiBenchDetail))
+	m.HandleFunc("POST /api/v1/benches/{id}/apps/{app}/update", s.requireRole(auth.RoleDeployer, s.apiBenchAppUpdate))
 
 	m.HandleFunc("GET /api/v1/deploys", s.requireRole(auth.RoleViewer, s.apiDeploys))
+	m.HandleFunc("GET /api/v1/deploys/{id}/jobs", s.requireRole(auth.RoleViewer, s.apiDeployJobs))
 	m.HandleFunc("GET /api/v1/jobs/{id}", s.requireRole(auth.RoleViewer, s.apiJobDetail))
 
 	m.HandleFunc("GET /api/v1/servers", s.requireRole(auth.RoleViewer, s.apiServers))
@@ -1038,11 +1400,18 @@ func (s *Server) registerAPIRoutes() {
 	m.HandleFunc("POST /api/v1/servers", s.requireRole(auth.RoleAdmin, s.apiServerAdd))
 	m.HandleFunc("POST /api/v1/servers/{id}/refresh", s.requireRole(auth.RoleAdmin, s.apiServerRefresh))
 	m.HandleFunc("POST /api/v1/servers/{id}/import", s.requireRole(auth.RoleAdmin, s.apiServerImport))
+	m.HandleFunc("GET /api/v1/servers/{id}/heartbeats", s.requireRole(auth.RoleViewer, s.apiServerHeartbeats))
 
 	m.HandleFunc("GET /api/v1/app-sources", s.requireRole(auth.RoleViewer, s.apiAppSources))
 	m.HandleFunc("POST /api/v1/app-sources", s.requireRole(auth.RoleAdmin, s.apiAppSourceAdd))
 	m.HandleFunc("GET /api/v1/web-apps", s.requireRole(auth.RoleViewer, s.apiWebApps))
+	m.HandleFunc("POST /api/v1/web-apps", s.requireRole(auth.RoleDeployer, s.apiWebAppCreate))
+	m.HandleFunc("POST /api/v1/web-apps/{id}/deploy", s.requireRole(auth.RoleDeployer, s.apiWebAppDeploy))
+	m.HandleFunc("POST /api/v1/web-apps/{id}/rollback", s.requireRole(auth.RoleDeployer, s.apiWebAppRollback))
+	m.HandleFunc("DELETE /api/v1/web-apps/{id}", s.requireRole(auth.RoleAdmin, s.apiWebAppDelete))
 	m.HandleFunc("GET /api/v1/routes", s.requireRole(auth.RoleViewer, s.apiRoutes))
+	m.HandleFunc("GET /api/v1/routes/{id}", s.requireRole(auth.RoleViewer, s.apiRouteDetail))
+	m.HandleFunc("POST /api/v1/routes", s.requireRole(auth.RoleAdmin, s.apiRouteCreate))
 	m.HandleFunc("POST /api/v1/routes/{id}/apply", s.requireRole(auth.RoleAdmin, s.apiRouteApply))
 
 	m.HandleFunc("GET /api/v1/users", s.requireRole(auth.RoleAdmin, s.apiUsers))
@@ -1053,6 +1422,7 @@ func (s *Server) registerAPIRoutes() {
 	m.HandleFunc("DELETE /api/v1/github/token", s.requireRole(auth.RoleAdmin, s.apiGithubDisconnect))
 	m.HandleFunc("GET /api/v1/github/repos", s.requireRole(auth.RoleAdmin, s.apiGithubRepos))
 	m.HandleFunc("GET /api/v1/github/branches", s.requireRole(auth.RoleAdmin, s.apiGithubBranches))
+	m.HandleFunc("GET /api/v1/github/dockerfiles", s.requireRole(auth.RoleDeployer, s.apiGithubDockerfiles))
 	m.HandleFunc("GET /api/v1/github/commits", s.requireRole(auth.RoleDeployer, s.apiGithubCommits))
 
 	m.HandleFunc("GET /api/v1/pipelines", s.requireRole(auth.RoleViewer, s.apiPipelines))

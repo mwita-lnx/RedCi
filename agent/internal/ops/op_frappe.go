@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"path"
 	"regexp"
 	"strings"
@@ -43,16 +44,26 @@ func runDeployFrappeApp(ctx context.Context, env Env, job protocol.Job, log Log)
 	prevCommit := gitHead(ctx, env, appDir, log)
 
 	// 1. Backup each affected site BEFORE touching code; capture the db path.
+	//    A site whose backup fails (missing, not installed, or corrupted) is
+	//    SKIPPED with a warning rather than failing the whole bench-wide update —
+	//    one broken site must not block updating the healthy ones. healthySites
+	//    carries the sites that backed up and will be migrated.
 	backups := map[string]string{}
+	var healthySites []string
 	for _, site := range p.Sites {
+		log("system", "== step: backup "+site)
 		out, _, err := env.Runner.Exec(ctx, jobs.Step{
 			Name: "backup " + site, Dir: p.BenchPath, Command: "bench",
 			Args: []string{"--site", site, "backup"},
 		}, 30*time.Minute)
-		log("stdout", out)
-		if err != nil {
-			return fail(err)
+		if out != "" {
+			log("stdout", out)
 		}
+		if err != nil {
+			log("stderr", "skipping "+site+": pre-deploy backup failed (site missing/not installed/corrupted): "+err.Error())
+			continue
+		}
+		healthySites = append(healthySites, site)
 		if dbPath := parseBackupDBPath(out); dbPath != "" {
 			backups[site] = dbPath
 			log("system", "captured pre-deploy backup for "+site+": "+dbPath)
@@ -60,11 +71,17 @@ func runDeployFrappeApp(ctx context.Context, env Env, job protocol.Job, log Log)
 			log("stderr", "could not parse backup path for "+site+"; rollback DB restore may be unavailable")
 		}
 	}
+	if len(healthySites) == 0 {
+		return fail(fmt.Errorf("no sites could be backed up (all %d skipped); nothing to update", len(p.Sites)))
+	}
 
-	// 2. Fetch + checkout the exact commit.
+	// 2. Fetch + checkout the exact commit. Resolve the actual remote name —
+	//    apps cloned via `bench get-app` often use "upstream", not "origin".
+	remote := resolveRemote(ctx, env, appDir, p.Branch, log)
+	log("system", "fetching from remote: "+remote)
 	fetch := jobs.Step{
 		Name: "fetch", Dir: appDir, Command: "git",
-		Args: []string{"fetch", "origin", p.Branch},
+		Args: []string{"fetch", remote, p.Branch},
 		Env:  frappeGitEnv(token), Redact: []string{token},
 	}
 	if err := runStepLogged(ctx, env, fetch, log, 10*time.Minute); err != nil {
@@ -83,9 +100,10 @@ func runDeployFrappeApp(ctx context.Context, env Env, job protocol.Job, log Log)
 		BenchPath:   p.BenchPath,
 		App:         p.App,
 		AppDir:      appDir,
-		Sites:       p.Sites,
+		Sites:       healthySites, // only migrate sites that backed up successfully
 		HasPackage:  p.HasPackage,
 		Maintenance: p.Maintenance,
+		SkipPatches: p.SkipPatches,
 	}, log); res.Status != "succeeded" {
 		return res
 	}
@@ -158,6 +176,7 @@ type applyParams struct {
 	Sites       []string
 	HasPackage  bool
 	Maintenance bool
+	SkipPatches bool // pass --skip-failing to bench migrate
 }
 
 // frappeApplyAndMigrate runs: pip install, (yarn), maintenance on, migrate,
@@ -209,9 +228,13 @@ func frappeApplyAndMigrate(ctx context.Context, env Env, p applyParams, log Log)
 	}
 
 	for _, site := range p.Sites {
+		migArgs := []string{"--site", site, "migrate"}
+		if p.SkipPatches {
+			migArgs = append(migArgs, "--skip-failing")
+		}
 		mig := jobs.Step{
 			Name: "migrate " + site, Dir: p.BenchPath, Command: "bench",
-			Args: []string{"--site", site, "migrate"},
+			Args: migArgs,
 		}
 		if err := runStepLogged(ctx, env, mig, log, 30*time.Minute); err != nil {
 			maintenanceOff()
@@ -236,6 +259,47 @@ func frappeApplyAndMigrate(ctx context.Context, env Env, p applyParams, log Log)
 	}
 	maintenanceOff()
 	return Result{Status: "succeeded"}
+}
+
+// resolveRemote returns the git remote to fetch from for appDir. Frappe apps are
+// not always cloned as "origin" — `bench get-app` and manual setups often use
+// "upstream". Preference: the branch's configured upstream remote, then "origin"
+// if it exists, then the sole remote, else "origin" as a last resort.
+func resolveRemote(ctx context.Context, env Env, appDir, branch string, log Log) string {
+	// 1. The remote the branch tracks, if any (e.g. branch.<b>.remote = upstream).
+	if branch != "" {
+		if out, _, err := env.Runner.Exec(ctx, jobs.Step{
+			Dir: appDir, Command: "git",
+			Args: []string{"config", "--get", "branch." + branch + ".remote"},
+		}, 1*time.Minute); err == nil {
+			if r := strings.TrimSpace(out); r != "" {
+				return r
+			}
+		}
+	}
+	// 2. Fall back to the list of remotes: prefer origin, else the only one.
+	out, _, err := env.Runner.Exec(ctx, jobs.Step{
+		Dir: appDir, Command: "git", Args: []string{"remote"},
+	}, 1*time.Minute)
+	if err != nil {
+		log("stderr", "could not list git remotes; defaulting to origin")
+		return "origin"
+	}
+	var remotes []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if r := strings.TrimSpace(line); r != "" {
+			remotes = append(remotes, r)
+		}
+	}
+	for _, r := range remotes {
+		if r == "origin" {
+			return "origin"
+		}
+	}
+	if len(remotes) == 1 {
+		return remotes[0]
+	}
+	return "origin"
 }
 
 // gitHead returns the current HEAD commit of appDir, or "" if it cannot be read.

@@ -95,6 +95,23 @@ func (s *Server) apiGithubBranches(w http.ResponseWriter, r *http.Request) {
 	writeJSONAPI(w, http.StatusOK, out)
 }
 
+// apiGithubDockerfiles lists Dockerfile paths in a repo+branch so the web-app
+// wizard can offer them as a dropdown (and recommend pm2 when none exist).
+func (s *Server) apiGithubDockerfiles(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	branch := r.URL.Query().Get("branch")
+	if !validRepo(repo) {
+		apiError(w, http.StatusBadRequest, "repo must be owner/name")
+		return
+	}
+	paths, err := s.ghListDockerfiles(r.Context(), repo, branch)
+	if err != nil {
+		apiError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSONAPI(w, http.StatusOK, paths)
+}
+
 func (s *Server) apiGithubCommits(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
 	branch := r.URL.Query().Get("branch")

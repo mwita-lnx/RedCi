@@ -37,17 +37,21 @@ func (p IssueCertificateParams) Steps(ctx PlanContext) ([]Step, error) {
 				Command: "bench",
 				Args:    []string{"setup", "nginx", "--yes"},
 			},
-			Step{
-				Name:    "nginx test",
-				Command: "sudo",
-				Args:    []string{"/usr/sbin/nginx", "-t"},
-			},
-			Step{
-				Name:    "nginx reload",
-				Command: "sudo",
-				Args:    []string{"/usr/bin/systemctl", "reload", "nginx"},
-			},
 		)
+		if ctx.NginxVersion != "" {
+			steps = append(steps,
+				Step{
+					Name:    "nginx test",
+					Command: "sudo",
+					Args:    []string{"/usr/sbin/nginx", "-t"},
+				},
+				Step{
+					Name:    "nginx reload",
+					Command: "sudo",
+					Args:    []string{"/usr/bin/systemctl", "reload", "nginx"},
+				},
+			)
+		}
 	}
 	return steps, nil
 }

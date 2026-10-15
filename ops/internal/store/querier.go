@@ -40,6 +40,9 @@ type Querier interface {
 	CreatePipelineEnv(ctx context.Context, arg CreatePipelineEnvParams) (PipelineEnv, error)
 	// Proxy routes ---------------------------------------------------------------
 	CreateProxyRoute(ctx context.Context, arg CreateProxyRouteParams) (ProxyRoute, error)
+	// Create a Model B (path-split) route carrying its locations/frappe_site/static/
+	// aliases spec.
+	CreateProxyRouteModelB(ctx context.Context, arg CreateProxyRouteModelBParams) (ProxyRoute, error)
 	// Server enrollment and heartbeat -------------------------------------------
 	CreateServer(ctx context.Context, arg CreateServerParams) (Server, error)
 	CreateSite(ctx context.Context, arg CreateSiteParams) (Site, error)
@@ -50,9 +53,12 @@ type Querier interface {
 	DeletePipelineEnvs(ctx context.Context, pipelineID int64) error
 	DeleteSecret(ctx context.Context, name string) error
 	DeleteSiteRow(ctx context.Context, id int64) error
+	DeleteWebApp(ctx context.Context, id int64) error
 	EarlierSiblingsSucceeded(ctx context.Context, arg EarlierSiblingsSucceededParams) (int64, error)
 	// Worker passes --------------------------------------------------------------
 	ExpireLeases(ctx context.Context, leaseExpiresAt sql.NullInt64) ([]ExpireLeasesRow, error)
+	// ready jobs that no agent has claimed within the cutoff become lost.
+	ExpireStaleReady(ctx context.Context, createdAt int64) ([]ExpireStaleReadyRow, error)
 	FindAppSourcesByRepoBranch(ctx context.Context, arg FindAppSourcesByRepoBranchParams) ([]AppSource, error)
 	FindServerByAgentTokenHash(ctx context.Context, agentTokenHash sql.NullString) (Server, error)
 	FindServerByEnrollmentHash(ctx context.Context, arg FindServerByEnrollmentHashParams) (Server, error)
@@ -70,6 +76,7 @@ type Querier interface {
 	GetProxyRoute(ctx context.Context, id int64) (ProxyRoute, error)
 	GetSecret(ctx context.Context, name string) ([]byte, error)
 	GetServerByID(ctx context.Context, id int64) (Server, error)
+	GetServerDiscovery(ctx context.Context, id int64) (sql.NullString, error)
 	GetSite(ctx context.Context, id int64) (Site, error)
 	GetSiteByDomain(ctx context.Context, domain string) (Site, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
@@ -101,13 +108,16 @@ type Querier interface {
 	ListSites(ctx context.Context) ([]Site, error)
 	ListUsers(ctx context.Context) ([]User, error)
 	ListWebApps(ctx context.Context) ([]WebApp, error)
-	LockHeld(ctx context.Context, lockKey sql.NullString) (int64, error)
+	// A lock key is held if it appears in EITHER lock column of any active job, so
+	// that a two-lock job and a one-lock job contend correctly on a shared key.
+	LockHeld(ctx context.Context, key sql.NullString) (int64, error)
 	MarkServersOffline(ctx context.Context, lastHeartbeatAt sql.NullInt64) error
 	PromoteJob(ctx context.Context, id int64) error
 	PurgeOldLoginAttempts(ctx context.Context, ts int64) error
 	PurgeOldWebhookDeliveries(ctx context.Context, receivedAt int64) error
 	PutSecret(ctx context.Context, arg PutSecretParams) error
 	// Candidate queued jobs with no earlier unfinished sibling and a free lock.
+	// A job may carry two locks (lock_key, lock_key2); both must be free to promote.
 	ReadyJobsToPromote(ctx context.Context) ([]ReadyJobsToPromoteRow, error)
 	RecordWebhookDelivery(ctx context.Context, arg RecordWebhookDeliveryParams) error
 	RenewLease(ctx context.Context, id int64) error
@@ -119,8 +129,13 @@ type Querier interface {
 	SetEnvDeploy(ctx context.Context, arg SetEnvDeployParams) error
 	SetFrappeAppCommit(ctx context.Context, arg SetFrappeAppCommitParams) error
 	SetFrappeAppCommits(ctx context.Context, arg SetFrappeAppCommitsParams) error
+	// Store the git state the agent read off the bench's apps/<name>/.git.
+	SetFrappeAppGit(ctx context.Context, arg SetFrappeAppGitParams) error
 	SetProxyRouteApplied(ctx context.Context, arg SetProxyRouteAppliedParams) error
 	SetProxyRouteStatus(ctx context.Context, arg SetProxyRouteStatusParams) error
+	// Stash the most recent file-only discovery push from the agent so Refresh can
+	// re-import on demand.
+	SetServerDiscovery(ctx context.Context, arg SetServerDiscoveryParams) error
 	SetSiteSSL(ctx context.Context, arg SetSiteSSLParams) error
 	SetSiteStatus(ctx context.Context, arg SetSiteStatusParams) error
 	SetUserDisabled(ctx context.Context, arg SetUserDisabledParams) error
@@ -133,7 +148,7 @@ type Querier interface {
 	TouchUserLogin(ctx context.Context, id int64) error
 	UpdateSiteApps(ctx context.Context, arg UpdateSiteAppsParams) error
 	UpsertDeployPoint(ctx context.Context, arg UpsertDeployPointParams) error
-	WebAppsForSource(ctx context.Context, appSourceID int64) ([]WebApp, error)
+	WebAppsForSource(ctx context.Context, appSourceID sql.NullInt64) ([]WebApp, error)
 }
 
 var _ Querier = (*Queries)(nil)

@@ -9,7 +9,7 @@ import (
 )
 
 // CollectFacts gathers lightweight host facts for register/heartbeat. Deep
-// probes (nginx/bench/docker versions) are filled in by the server_status job;
+// probes (nginx/bench/docker versions) are not collected here;
 // this is the cheap subset sent on every heartbeat, now including live
 // CPU/memory/disk utilization for the fleet view.
 func (c Config) CollectFacts() protocol.Facts {

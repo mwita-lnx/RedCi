@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { apiGet, Audit, Dashboard, Deploy, Me, Pipeline } from "../api";
 import { PanelBox } from "../ui";
 
@@ -41,6 +42,13 @@ export function DashboardPage() {
   const { data: pipelines } = useQuery({ queryKey: ["pipelines"], queryFn: () => apiGet<Pipeline[]>("/pipelines") });
   const { data: audit } = useQuery({ queryKey: ["audit"], queryFn: () => apiGet<Audit[]>("/audit") });
   const [filter, setFilter] = useState<Filter>("all");
+  const nav = useNavigate();
+
+  // Open a run's last job detail (same behavior as the Deploys page rows).
+  const openRun = (r: Deploy) => {
+    if (r.last_job_id > 0) nav(`/jobs/${r.last_job_id}`);
+    else toast.message("This run has no job yet", { description: "It hasn't started on an agent." });
+  };
 
   const rows = deploys ?? [];
   const running = rows.filter((r) => r.status === "running");
@@ -150,7 +158,7 @@ export function DashboardPage() {
               <thead><tr><th>Status</th><th>Pipeline · Commit</th><th>Target</th><th>Stages</th><th>Time</th><th>When</th></tr></thead>
               <tbody>
                 {visible.map((r) => (
-                  <tr key={r.id}>
+                  <tr key={r.id} className="run-row" style={{ cursor: "pointer" }} onClick={() => openRun(r)}>
                     <td><span className={`badge ${r.status}`}>{r.status}</span></td>
                     <td>
                       <div className="run-primary">{r.kind} <span className="num">#{r.id}</span></div>

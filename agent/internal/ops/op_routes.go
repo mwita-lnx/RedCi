@@ -16,12 +16,16 @@ func runWriteRoute(ctx context.Context, env Env, job protocol.Job, log Log) Resu
 		return fail(err)
 	}
 	content, err := jobs.RenderRoute(jobs.RouteData{
-		ID:       p.RouteID,
-		Domain:   p.Domain,
-		Upstream: p.Upstream,
-		SSL:      p.SSL,
-		Snippet:  p.Snippet,
-		HTTP2On:  nginxHasHTTP2On(env.NginxVer),
+		ID:         p.RouteID,
+		Domain:     p.Domain,
+		Aliases:    p.Aliases,
+		Upstream:   p.Upstream,
+		SSL:        p.SSL,
+		Snippet:    p.Snippet,
+		HTTP2On:    nginxHasHTTP2On(env.NginxVer),
+		FrappeSite: p.FrappeSite,
+		StaticRoot: p.StaticRoot,
+		Locations:  p.Locations,
 	})
 	if err != nil {
 		return fail(err)

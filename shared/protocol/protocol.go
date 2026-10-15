@@ -60,6 +60,14 @@ type HeartbeatResponse struct {
 	Cancel []int64 `json:"cancel"`
 }
 
+// DiscoveryRequest is POST /agent/v1/discovery, pushed periodically by the agent
+// (not in response to a job). Result carries the file-only StatusResult shape
+// {benches:[...]} so the panel can reconcile benches/sites without the operator
+// clicking Refresh. Version fields are omitted (no subprocess probes).
+type DiscoveryRequest struct {
+	Result json.RawMessage `json:"result"`
+}
+
 // Job is the unit returned by GET /agent/v1/jobs/next. Params has secret
 // references already resolved to plaintext values (over TLS only).
 type Job struct {

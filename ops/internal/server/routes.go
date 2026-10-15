@@ -82,6 +82,7 @@ func (s *Server) routes() {
 	// Agent API (VPN-only in production; bearer-token auth, no session/CSRF).
 	s.mux.HandleFunc("POST /agent/v1/register", s.handleAgentRegister)
 	s.mux.HandleFunc("POST /agent/v1/heartbeat", s.requireAgent(s.handleAgentHeartbeat))
+	s.mux.HandleFunc("POST /agent/v1/discovery", s.requireAgent(s.handleAgentDiscovery))
 	s.mux.HandleFunc("GET /agent/v1/jobs/next", s.requireAgent(s.handleAgentJobsNext))
 	s.mux.HandleFunc("POST /agent/v1/jobs/{id}/start", s.requireAgent(s.handleAgentJobStart))
 	s.mux.HandleFunc("POST /agent/v1/jobs/{id}/logs", s.requireAgent(s.handleAgentJobLogs))

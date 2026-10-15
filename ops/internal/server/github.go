@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -137,4 +138,46 @@ func (s *Server) ghLatestCommit(ctx context.Context, repo, branch string) string
 		return ""
 	}
 	return c.SHA
+}
+
+// ghListDockerfiles returns the repo-relative paths of every Dockerfile in a
+// repo at the given branch (files named "Dockerfile" or "*.Dockerfile"), using
+// the git trees API recursively. Repo-root Dockerfile sorts first.
+func (s *Server) ghListDockerfiles(ctx context.Context, repo, branch string) ([]string, error) {
+	if branch == "" {
+		branch = "HEAD"
+	}
+	var tree struct {
+		Tree []struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+		} `json:"tree"`
+		Truncated bool `json:"truncated"`
+	}
+	// The trees API accepts a branch name as the tree-ish ref.
+	if err := s.ghGet(ctx, fmt.Sprintf("/repos/%s/git/trees/%s?recursive=1", repo, url.PathEscape(branch)), &tree); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range tree.Tree {
+		if e.Type != "blob" {
+			continue
+		}
+		base := e.Path
+		if i := strings.LastIndexByte(base, '/'); i >= 0 {
+			base = base[i+1:]
+		}
+		if base == "Dockerfile" || strings.HasSuffix(base, ".Dockerfile") {
+			out = append(out, e.Path)
+		}
+	}
+	// Sort repo-root "Dockerfile" first, then shallow paths, then lexical.
+	sort.Slice(out, func(i, j int) bool {
+		di, dj := strings.Count(out[i], "/"), strings.Count(out[j], "/")
+		if di != dj {
+			return di < dj
+		}
+		return out[i] < out[j]
+	})
+	return out, nil
 }

@@ -138,7 +138,7 @@ func runCmd() *cobra.Command {
 				defer jrnl.Close()
 			}
 
-			run := runner.New(runner.Options{DryRun: dryRun, PathEnv: cfg.BenchPathEnv + ":/usr/local/sbin:/usr/local/bin:/usr/bin:/bin"})
+			run := runner.New(runner.Options{DryRun: dryRun, PathEnv: cfg.BenchPathEnv + ":/usr/local/sbin:/usr/local/bin:/usr/bin:/bin", Home: cfg.HomeDir})
 			ag := agentcfg.NewAgent(cfg, cred, cli, jrnl, run, version, log)
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)

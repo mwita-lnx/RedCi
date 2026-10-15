@@ -20,8 +20,18 @@ type DiscoveredBench struct {
 	Path        string            `json:"path"`
 	Apps        []string          `json:"apps"`
 	AppVersions map[string]string `json:"app_versions,omitempty"`
+	AppGit      map[string]AppGit `json:"app_git,omitempty"` // per-app git state, read from .git files
 	Sites       []DiscoveredSite  `json:"sites"`
 	Facts       BenchFacts        `json:"facts"`
+}
+
+// AppGit is the on-disk git state of one app under apps/<name>, read purely from
+// the .git directory (no git subprocess): the checked-out branch, the HEAD
+// commit SHA, and the branch's remote tracking URL (normalized to owner/repo).
+type AppGit struct {
+	Branch    string `json:"branch,omitempty"`
+	Commit    string `json:"commit,omitempty"`
+	RemoteURL string `json:"remote_url,omitempty"` // normalized owner/repo when GitHub
 }
 
 // BenchFacts are runtime details read from a bench's config/Procfile — the
@@ -53,25 +63,22 @@ type StatusResult struct {
 	Benches       []DiscoveredBench `json:"benches"`
 }
 
-// runServerStatus collects versions and discovers benches/sites from files.
-func runServerStatus(ctx context.Context, env Env, log Log) Result {
+// DiscoverBenches does the cheap, file-only half of server_status: it walks the
+// bench roots and reads benches/sites from disk, with NO version subprocesses
+// (bench/docker/nginx). The agent's periodic discovery push uses this so it can
+// run every minute without risk of hanging on `bench version` when the bench is
+// busy. The result has the same shape as a server_status job, with version
+// fields left empty (the panel preserves any previously-probed versions).
+func DiscoverBenches(roots []string) StatusResult {
 	res := StatusResult{}
-	res.NginxVersion = env.NginxVer
-	if res.NginxVersion == "" {
-		res.NginxVersion = detectNginxVersion(ctx, env)
-	}
-	res.BenchVersion = firstWord(execOut(ctx, env, "bench", "version"))
-	res.DockerVersion = firstWord(execOut(ctx, env, "docker", "--version"))
-
-	for _, root := range env.BenchRoots {
-		b, ok := discoverBench(root)
-		if ok {
+	for _, root := range roots {
+		if b, ok := discoverBench(root); ok {
 			res.Benches = append(res.Benches, b)
 		}
 	}
-	log("system", "collected server status and discovered "+strconv.Itoa(len(res.Benches))+" bench(es)")
-	return ok(res)
+	return res
 }
+
 
 // discoverBench inspects a bench directory using only file reads.
 func discoverBench(root string) (DiscoveredBench, bool) {
@@ -110,8 +117,145 @@ func discoverBench(root string) (DiscoveredBench, bool) {
 		})
 	}
 	b.AppVersions = readBenchAppVersions(root, b.Apps)
+	b.AppGit = readBenchAppGit(root, b.Apps)
 	b.Facts = readBenchFacts(root)
 	return b, true
+}
+
+// readBenchAppGit reads each app's git state from apps/<app>/.git using only
+// file reads (no git subprocess, so it is safe inside the periodic push):
+//   - .git/HEAD              -> "ref: refs/heads/<branch>" (branch name)
+//   - .git/refs/heads/<br>   -> the commit SHA (falls back to packed-refs)
+//   - .git/config            -> the branch's remote URL, normalized to owner/repo
+func readBenchAppGit(benchPath string, apps []string) map[string]AppGit {
+	out := make(map[string]AppGit, len(apps))
+	for _, app := range apps {
+		gitDir := filepath.Join(benchPath, "apps", app, ".git")
+		if fi, err := os.Stat(gitDir); err != nil || !fi.IsDir() {
+			continue
+		}
+		var g AppGit
+
+		// HEAD → branch name (and commit if detached).
+		head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+		if err != nil {
+			continue
+		}
+		headStr := strings.TrimSpace(string(head))
+		if ref := strings.TrimPrefix(headStr, "ref: "); ref != headStr {
+			g.Branch = strings.TrimPrefix(ref, "refs/heads/")
+			g.Commit = readGitRef(gitDir, ref)
+		} else {
+			// Detached HEAD: the file holds the SHA directly.
+			g.Commit = headStr
+		}
+
+		// Remote URL for the branch's tracking remote (default "origin").
+		g.RemoteURL = readGitRemote(gitDir, g.Branch)
+
+		if g.Branch != "" || g.Commit != "" || g.RemoteURL != "" {
+			out[app] = g
+		}
+	}
+	return out
+}
+
+// readGitRef resolves a ref (e.g. refs/heads/version-16) to a commit SHA,
+// checking the loose ref file first, then packed-refs.
+func readGitRef(gitDir, ref string) string {
+	if data, err := os.ReadFile(filepath.Join(gitDir, filepath.FromSlash(ref))); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	if data, err := os.ReadFile(filepath.Join(gitDir, "packed-refs")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "^") {
+				continue
+			}
+			if fields := strings.Fields(line); len(fields) == 2 && fields[1] == ref {
+				return fields[0]
+			}
+		}
+	}
+	return ""
+}
+
+// readGitRemote reads .git/config and returns the URL of the remote that the
+// given branch tracks (or "origin"), normalized to owner/repo for GitHub URLs.
+func readGitRemote(gitDir, branch string) string {
+	data, err := os.ReadFile(filepath.Join(gitDir, "config"))
+	if err != nil {
+		return ""
+	}
+	// Minimal INI parse: collect [remote "X"].url and [branch "Y"].remote.
+	remoteURLs := map[string]string{}
+	branchRemote := map[string]string{}
+	var section, subsection string
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			inner := strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
+			if i := strings.Index(inner, "\""); i >= 0 {
+				section = strings.TrimSpace(inner[:i])
+				subsection = strings.Trim(inner[i:], "\"")
+			} else {
+				section, subsection = strings.TrimSpace(inner), ""
+			}
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		switch section {
+		case "remote":
+			if k == "url" {
+				remoteURLs[subsection] = v
+			}
+		case "branch":
+			if k == "remote" {
+				branchRemote[subsection] = v
+			}
+		}
+	}
+	// Prefer the branch's tracking remote, then "origin". If neither resolves
+	// (e.g. the repo only defines an "upstream" remote and the branch has no
+	// tracking config), fall back to the sole remote when there is exactly one.
+	remote := branchRemote[branch]
+	if remote == "" {
+		remote = "origin"
+	}
+	if url := remoteURLs[remote]; url != "" {
+		return normalizeRepo(url)
+	}
+	if len(remoteURLs) == 1 {
+		for _, url := range remoteURLs {
+			return normalizeRepo(url)
+		}
+	}
+	return ""
+}
+
+// normalizeRepo turns a git remote URL into "owner/repo" for GitHub, leaving
+// other URLs as-is (trimmed of a trailing .git).
+func normalizeRepo(u string) string {
+	if u == "" {
+		return ""
+	}
+	s := strings.TrimSuffix(u, ".git")
+	// git@github.com:owner/repo
+	if i := strings.Index(s, "github.com:"); i >= 0 {
+		return s[i+len("github.com:"):]
+	}
+	// https://github.com/owner/repo
+	if i := strings.Index(s, "github.com/"); i >= 0 {
+		return s[i+len("github.com/"):]
+	}
+	return s
 }
 
 // readBenchFacts gathers runtime details for the bench from files only:
@@ -198,29 +342,12 @@ func readBenchAppVersions(benchPath string, apps []string) map[string]string {
 	return versions
 }
 
-func detectNginxVersion(ctx context.Context, env Env) string {
-	return DetectNginxVersion(ctx, env.Runner)
-}
-
 // DetectNginxVersion runs `nginx -v` (output like "nginx version: nginx/1.24.0")
 // and returns the version string, or "" if it cannot be determined.
 func DetectNginxVersion(ctx context.Context, r *runner.Runner) string {
 	out, _, _ := r.Exec(ctx, jobs.Step{Command: "nginx", Args: []string{"-v"}}, 30*time.Second)
 	if i := strings.Index(out, "nginx/"); i >= 0 {
 		return strings.TrimSpace(out[i+len("nginx/"):])
-	}
-	return ""
-}
-
-func execOut(ctx context.Context, env Env, cmd string, args ...string) string {
-	out, _, _ := env.Runner.Exec(ctx, jobs.Step{Command: cmd, Args: args}, 30*time.Second)
-	return out
-}
-
-func firstWord(s string) string {
-	s = strings.TrimSpace(s)
-	for _, w := range strings.Fields(s) {
-		return w
 	}
 	return ""
 }

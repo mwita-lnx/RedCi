@@ -69,6 +69,14 @@ cat <<EOF
 
 Install complete. Next:
   1. Edit /etc/ops-agent/config.toml (panel_url, bench_roots, bench_path_env).
+     Make sure bench_path_env lets the agent find both 'bench' AND the
+     'mariadb' client — new-site shells out to it to import the base schema.
+     Verify as the agent user:
+         sudo -u $AGENT_USER env PATH="\$(grep '^bench_path_env' \\
+           /etc/ops-agent/config.toml | cut -d'"' -f2):/usr/bin:/bin" \\
+           sh -c 'command -v bench && command -v mariadb'
+     Both must print a path; if 'mariadb' is missing, append its dir to
+     bench_path_env.
   2. Enroll:  sudo -u $AGENT_USER ops-agent register --panel $PANEL_URL --token <token>
   3. Start:   sudo systemctl enable --now ops-agent
 EOF

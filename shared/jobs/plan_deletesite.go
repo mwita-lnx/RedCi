@@ -1,12 +1,12 @@
 package jobs
 
 // Steps for delete_site: drop the site then regenerate nginx config.
-func (p DeleteSiteParams) Steps(_ PlanContext) ([]Step, error) {
+func (p DeleteSiteParams) Steps(ctx PlanContext) ([]Step, error) {
 	dbUser := string(p.DBRootUser)
 	if dbUser == "" {
 		dbUser = "root"
 	}
-	return []Step{
+	steps := []Step{
 		{
 			Name:    "drop site",
 			Dir:     p.BenchPath,
@@ -24,15 +24,20 @@ func (p DeleteSiteParams) Steps(_ PlanContext) ([]Step, error) {
 			Command: "bench",
 			Args:    []string{"setup", "nginx", "--yes"},
 		},
-		{
-			Name:    "nginx test",
-			Command: "sudo",
-			Args:    []string{"/usr/sbin/nginx", "-t"},
-		},
-		{
-			Name:    "nginx reload",
-			Command: "sudo",
-			Args:    []string{"/usr/bin/systemctl", "reload", "nginx"},
-		},
-	}, nil
+	}
+	if ctx.NginxVersion != "" {
+		steps = append(steps,
+			Step{
+				Name:    "nginx test",
+				Command: "sudo",
+				Args:    []string{"/usr/sbin/nginx", "-t"},
+			},
+			Step{
+				Name:    "nginx reload",
+				Command: "sudo",
+				Args:    []string{"/usr/bin/systemctl", "reload", "nginx"},
+			},
+		)
+	}
+	return steps, nil
 }

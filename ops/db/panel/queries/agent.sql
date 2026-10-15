@@ -28,6 +28,14 @@ UPDATE servers
 SET status = 'online', agent_version = ?, facts_json = ?, last_heartbeat_at = unixepoch()
 WHERE id = ?;
 
+-- name: SetServerDiscovery :exec
+-- Stash the most recent file-only discovery push from the agent so Refresh can
+-- re-import on demand.
+UPDATE servers SET last_discovery_json = ? WHERE id = ?;
+
+-- name: GetServerDiscovery :one
+SELECT last_discovery_json FROM servers WHERE id = ?;
+
 -- name: MarkServersOffline :exec
 UPDATE servers
 SET status = 'offline'
@@ -87,9 +95,16 @@ UPDATE jobs SET status = 'lost', finished_at = unixepoch()
 WHERE status IN ('claimed','running') AND lease_expires_at < ?
 RETURNING id, deploy_id, server_id;
 
+-- name: ExpireStaleReady :many
+-- ready jobs that no agent has claimed within the cutoff become lost.
+UPDATE jobs SET status = 'lost', finished_at = unixepoch()
+WHERE status = 'ready' AND created_at < ?
+RETURNING id, deploy_id, server_id;
+
 -- name: ReadyJobsToPromote :many
 -- Candidate queued jobs with no earlier unfinished sibling and a free lock.
-SELECT j.id, j.server_id, j.lock_key, j.deploy_id, j.seq
+-- A job may carry two locks (lock_key, lock_key2); both must be free to promote.
+SELECT j.id, j.server_id, j.lock_key, j.lock_key2, j.deploy_id, j.seq
 FROM jobs j
 WHERE j.status = 'queued'
 ORDER BY j.deploy_id, j.seq, j.id;
@@ -100,16 +115,19 @@ FROM jobs
 WHERE deploy_id = ? AND seq < ? AND status != 'succeeded';
 
 -- name: LockHeld :one
+-- A lock key is held if it appears in EITHER lock column of any active job, so
+-- that a two-lock job and a one-lock job contend correctly on a shared key.
 SELECT COUNT(*) AS held
 FROM jobs
-WHERE lock_key = ? AND status IN ('ready','claimed','running');
+WHERE (lock_key = @key OR lock_key2 = @key)
+  AND status IN ('ready','claimed','running');
 
 -- name: PromoteJob :exec
 UPDATE jobs SET status = 'ready' WHERE id = ? AND status = 'queued';
 
 -- name: CreateJob :one
-INSERT INTO jobs (deploy_id, seq, server_id, type, params_json, lock_key, max_attempts)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO jobs (deploy_id, seq, server_id, type, params_json, lock_key, lock_key2, max_attempts)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: ListJobsForDeploy :many

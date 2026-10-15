@@ -11,10 +11,10 @@ import (
 type Type string
 
 const (
-	TypeServerStatus     Type = "server_status"
 	TypeListNginxConfigs Type = "list_nginx_configs"
 	TypeNewSite          Type = "new_site"
 	TypeInstallApp       Type = "install_app"
+	TypeUninstallApp     Type = "uninstall_app"
 	TypeGetFrappeApp     Type = "get_frappe_app"
 	TypeDeployFrappeApp  Type = "deploy_frappe_app"
 	TypeBackupSite       Type = "backup_site"
@@ -39,10 +39,10 @@ type Spec struct {
 
 // registry holds the Spec for every known job type.
 var registry = map[Type]Spec{
-	TypeServerStatus:     {TypeServerStatus, 1 * time.Minute, true, 3},
 	TypeListNginxConfigs: {TypeListNginxConfigs, 1 * time.Minute, true, 3},
 	TypeNewSite:          {TypeNewSite, 30 * time.Minute, false, 1},
 	TypeInstallApp:       {TypeInstallApp, 20 * time.Minute, false, 1},
+	TypeUninstallApp:     {TypeUninstallApp, 20 * time.Minute, false, 1},
 	TypeGetFrappeApp:     {TypeGetFrappeApp, 20 * time.Minute, false, 1},
 	TypeDeployFrappeApp:  {TypeDeployFrappeApp, 45 * time.Minute, false, 1},
 	TypeBackupSite:       {TypeBackupSite, 30 * time.Minute, false, 1},
@@ -72,14 +72,14 @@ type Params interface {
 // into the right concrete struct.
 func newParams(t Type) (Params, error) {
 	switch t {
-	case TypeServerStatus:
-		return &ServerStatusParams{}, nil
 	case TypeListNginxConfigs:
 		return &ListNginxConfigsParams{}, nil
 	case TypeNewSite:
 		return &NewSiteParams{}, nil
 	case TypeInstallApp:
 		return &InstallAppParams{}, nil
+	case TypeUninstallApp:
+		return &UninstallAppParams{}, nil
 	case TypeSetupNginx:
 		return &SetupNginxParams{}, nil
 	case TypeDeleteSite:

@@ -95,7 +95,7 @@ func (q *Queries) CountWebApps(ctx context.Context) (int64, error) {
 }
 
 const listServers = `-- name: ListServers :many
-SELECT id, name, hostname, status, enrollment_token_hash, enrollment_expires_at, agent_token_hash, agent_version, facts_json, last_heartbeat_at, created_at FROM servers ORDER BY name
+SELECT id, name, hostname, status, enrollment_token_hash, enrollment_expires_at, agent_token_hash, agent_version, facts_json, last_heartbeat_at, created_at, last_discovery_json FROM servers ORDER BY name
 `
 
 func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
@@ -119,6 +119,7 @@ func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
 			&i.FactsJson,
 			&i.LastHeartbeatAt,
 			&i.CreatedAt,
+			&i.LastDiscoveryJson,
 		); err != nil {
 			return nil, err
 		}

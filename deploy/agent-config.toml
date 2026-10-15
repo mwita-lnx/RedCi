@@ -11,9 +11,29 @@ bench_roots = ["/home/frappe/frappe-bench"]   # adjust to your bench location
 # Where web-app (Next.js/Docker) checkouts and compose files live.
 apps_root = "/srv/ops/apps"
 
-# PATH additions so `bench` and its Node.js/pip are found in job steps.
-# Common locations: ~/.local/bin (bench CLI), bench/env/bin (pip/python).
-bench_path_env = "/home/frappe/.local/bin:/home/frappe/frappe-bench/env/bin"
+# PATH additions so `bench` and the tools it shells out to are found in job
+# steps. The agent runs with a from-scratch environment, so anything a bench
+# command invokes MUST be reachable via this PATH (plus the runner's built-in
+# /usr/local/sbin:/usr/local/bin:/usr/bin:/bin tail).
+#
+# Must include:
+#   - ~/.local/bin                     the `bench` CLI
+#   - <bench>/env/bin                  the bench virtualenv (pip/python)
+#   - the MariaDB/MySQL client dir     `bench new-site` shells out to the
+#                                      `mariadb` client to import the base
+#                                      schema; if it is not on PATH new-site
+#                                      fails with "mariadb not found in PATH!".
+# On most Linux installs the client is in /usr/bin (already on the tail). If
+# MariaDB lives elsewhere (e.g. /opt/mariadb/bin, or Homebrew's /opt/homebrew/bin
+# on macOS dev hosts), append that dir here.
+bench_path_env = "/home/frappe/.local/bin:/home/frappe/frappe-bench/env/bin:/usr/bin"
+
+# $HOME for job steps. Tools run during jobs (npm, pip, pm2, bench) write caches
+# and logs under $HOME, so it must exist and be writable by the agent user. Leave
+# blank to inherit the agent process's own $HOME (systemd sets this to the service
+# user's home) — that is correct for frappe, ubuntu, deploy, etc. Only set this to
+# override, e.g. a shared cache dir.
+# home_dir = "/home/frappe"
 
 # Where the enrollment credential ({server_id, token}) is stored, mode 0600.
 credential_file = "/var/lib/ops-agent/credential"

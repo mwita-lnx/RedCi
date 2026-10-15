@@ -52,6 +52,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.flushOutbox(ctx)
 
 	go a.heartbeatLoop(ctx)
+	go a.discoveryLoop(ctx)
 
 	bo := client.NewBackoff(time.Second, 30*time.Second)
 	for {
@@ -144,16 +145,20 @@ func (a *Agent) runSteps(ctx context.Context, job protocol.Job, sink *logSink) p
 // runCustom validates then dispatches a control-flow op.
 func (a *Agent) runCustom(ctx context.Context, job protocol.Job, sink *logSink) protocol.ResultRequest {
 	// Validate the params (the generic path validates inside Plan; custom ops
-	// validate here so an invalid job never touches the host).
+	// validate here so an invalid job never touches the host). Emit the reason to
+	// the job's log sink too — otherwise the panel shows a failed job with no
+	// logs and no error.
 	if _, err := jobs.ParseParams(job.Type, job.Params, a.cfg.BenchRoots); err != nil {
+		sink.emit("stderr", "job validation failed: "+err.Error())
 		return protocol.ResultRequest{Status: "failed", ExitCode: -1, Error: err.Error()}
 	}
 	r := ops.RunCustom(ctx, ops.Env{
-		Runner:     a.run,
-		Nginx:      a.nginx,
-		AppsRoot:   a.cfg.AppsRoot,
-		BenchRoots: a.cfg.BenchRoots,
-		NginxVer:   a.nginxVer,
+		Runner:       a.run,
+		Nginx:        a.nginx,
+		AppsRoot:     a.cfg.AppsRoot,
+		WebsitesRoot: a.cfg.WebsitesRoot,
+		BenchRoots:   a.cfg.BenchRoots,
+		NginxVer:     a.nginxVer,
 	}, job, sink.emit)
 	return protocol.ResultRequest{
 		Status: r.Status, ExitCode: r.ExitCode, Error: r.Error, Result: r.Result,
@@ -242,6 +247,37 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			if err != nil {
 				a.log.Debug("heartbeat failed", "err", err)
 			}
+		}
+	}
+}
+
+// discoveryLoop pushes a file-only bench/site discovery scan to the panel on a
+// slower cadence than the heartbeat (it does disk I/O across the bench roots).
+// This is what makes new sites appear — and creating→active flips happen — on
+// their own, without an operator clicking Refresh. It is file-only (no
+// `bench version` subprocess) so it never hangs on a busy bench. An immediate
+// push on startup means discovery is fresh within seconds of the agent coming
+// up; thereafter every 60s.
+func (a *Agent) discoveryLoop(ctx context.Context) {
+	push := func() {
+		res := ops.DiscoverBenches(a.cfg.BenchRoots)
+		raw, err := json.Marshal(res)
+		if err != nil {
+			return
+		}
+		if err := a.cli.SendDiscovery(ctx, protocol.DiscoveryRequest{Result: raw}); err != nil {
+			a.log.Debug("discovery push failed", "err", err)
+		}
+	}
+	push() // immediate first report
+	t := time.NewTicker(60 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			push()
 		}
 	}
 }

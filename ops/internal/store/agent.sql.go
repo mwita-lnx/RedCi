@@ -146,9 +146,9 @@ func (q *Queries) CreateDeploy(ctx context.Context, arg CreateDeployParams) (Dep
 }
 
 const createJob = `-- name: CreateJob :one
-INSERT INTO jobs (deploy_id, seq, server_id, type, params_json, lock_key, max_attempts)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-RETURNING id, deploy_id, seq, server_id, type, params_json, lock_key, status, attempt, max_attempts, cancel_requested, lease_expires_at, claimed_at, started_at, finished_at, exit_code, error, result_json, created_at
+INSERT INTO jobs (deploy_id, seq, server_id, type, params_json, lock_key, lock_key2, max_attempts)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, deploy_id, seq, server_id, type, params_json, lock_key, status, attempt, max_attempts, cancel_requested, lease_expires_at, claimed_at, started_at, finished_at, exit_code, error, result_json, created_at, lock_key2
 `
 
 type CreateJobParams struct {
@@ -158,6 +158,7 @@ type CreateJobParams struct {
 	Type        string         `json:"type"`
 	ParamsJson  string         `json:"params_json"`
 	LockKey     sql.NullString `json:"lock_key"`
+	LockKey2    sql.NullString `json:"lock_key2"`
 	MaxAttempts int64          `json:"max_attempts"`
 }
 
@@ -169,6 +170,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		arg.Type,
 		arg.ParamsJson,
 		arg.LockKey,
+		arg.LockKey2,
 		arg.MaxAttempts,
 	)
 	var i Job
@@ -192,6 +194,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		&i.Error,
 		&i.ResultJson,
 		&i.CreatedAt,
+		&i.LockKey2,
 	)
 	return i, err
 }
@@ -200,7 +203,7 @@ const createServer = `-- name: CreateServer :one
 
 INSERT INTO servers (name, hostname, status, enrollment_token_hash, enrollment_expires_at)
 VALUES (?, ?, 'pending', ?, ?)
-RETURNING id, name, hostname, status, enrollment_token_hash, enrollment_expires_at, agent_token_hash, agent_version, facts_json, last_heartbeat_at, created_at
+RETURNING id, name, hostname, status, enrollment_token_hash, enrollment_expires_at, agent_token_hash, agent_version, facts_json, last_heartbeat_at, created_at, last_discovery_json
 `
 
 type CreateServerParams struct {
@@ -231,6 +234,7 @@ func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Ser
 		&i.FactsJson,
 		&i.LastHeartbeatAt,
 		&i.CreatedAt,
+		&i.LastDiscoveryJson,
 	)
 	return i, err
 }
@@ -290,8 +294,44 @@ func (q *Queries) ExpireLeases(ctx context.Context, leaseExpiresAt sql.NullInt64
 	return items, nil
 }
 
+const expireStaleReady = `-- name: ExpireStaleReady :many
+UPDATE jobs SET status = 'lost', finished_at = unixepoch()
+WHERE status = 'ready' AND created_at < ?
+RETURNING id, deploy_id, server_id
+`
+
+type ExpireStaleReadyRow struct {
+	ID       int64         `json:"id"`
+	DeployID sql.NullInt64 `json:"deploy_id"`
+	ServerID int64         `json:"server_id"`
+}
+
+// ready jobs that no agent has claimed within the cutoff become lost.
+func (q *Queries) ExpireStaleReady(ctx context.Context, createdAt int64) ([]ExpireStaleReadyRow, error) {
+	rows, err := q.db.QueryContext(ctx, expireStaleReady, createdAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ExpireStaleReadyRow{}
+	for rows.Next() {
+		var i ExpireStaleReadyRow
+		if err := rows.Scan(&i.ID, &i.DeployID, &i.ServerID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const findServerByAgentTokenHash = `-- name: FindServerByAgentTokenHash :one
-SELECT id, name, hostname, status, enrollment_token_hash, enrollment_expires_at, agent_token_hash, agent_version, facts_json, last_heartbeat_at, created_at FROM servers WHERE agent_token_hash = ? LIMIT 1
+SELECT id, name, hostname, status, enrollment_token_hash, enrollment_expires_at, agent_token_hash, agent_version, facts_json, last_heartbeat_at, created_at, last_discovery_json FROM servers WHERE agent_token_hash = ? LIMIT 1
 `
 
 func (q *Queries) FindServerByAgentTokenHash(ctx context.Context, agentTokenHash sql.NullString) (Server, error) {
@@ -309,12 +349,13 @@ func (q *Queries) FindServerByAgentTokenHash(ctx context.Context, agentTokenHash
 		&i.FactsJson,
 		&i.LastHeartbeatAt,
 		&i.CreatedAt,
+		&i.LastDiscoveryJson,
 	)
 	return i, err
 }
 
 const findServerByEnrollmentHash = `-- name: FindServerByEnrollmentHash :one
-SELECT id, name, hostname, status, enrollment_token_hash, enrollment_expires_at, agent_token_hash, agent_version, facts_json, last_heartbeat_at, created_at FROM servers
+SELECT id, name, hostname, status, enrollment_token_hash, enrollment_expires_at, agent_token_hash, agent_version, facts_json, last_heartbeat_at, created_at, last_discovery_json FROM servers
 WHERE enrollment_token_hash = ? AND enrollment_expires_at > ?
 LIMIT 1
 `
@@ -339,6 +380,7 @@ func (q *Queries) FindServerByEnrollmentHash(ctx context.Context, arg FindServer
 		&i.FactsJson,
 		&i.LastHeartbeatAt,
 		&i.CreatedAt,
+		&i.LastDiscoveryJson,
 	)
 	return i, err
 }
@@ -405,7 +447,7 @@ func (q *Queries) GetDeploy(ctx context.Context, id int64) (Deploy, error) {
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, deploy_id, seq, server_id, type, params_json, lock_key, status, attempt, max_attempts, cancel_requested, lease_expires_at, claimed_at, started_at, finished_at, exit_code, error, result_json, created_at FROM jobs WHERE id = ? LIMIT 1
+SELECT id, deploy_id, seq, server_id, type, params_json, lock_key, status, attempt, max_attempts, cancel_requested, lease_expires_at, claimed_at, started_at, finished_at, exit_code, error, result_json, created_at, lock_key2 FROM jobs WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id int64) (Job, error) {
@@ -431,12 +473,13 @@ func (q *Queries) GetJob(ctx context.Context, id int64) (Job, error) {
 		&i.Error,
 		&i.ResultJson,
 		&i.CreatedAt,
+		&i.LockKey2,
 	)
 	return i, err
 }
 
 const getServerByID = `-- name: GetServerByID :one
-SELECT id, name, hostname, status, enrollment_token_hash, enrollment_expires_at, agent_token_hash, agent_version, facts_json, last_heartbeat_at, created_at FROM servers WHERE id = ? LIMIT 1
+SELECT id, name, hostname, status, enrollment_token_hash, enrollment_expires_at, agent_token_hash, agent_version, facts_json, last_heartbeat_at, created_at, last_discovery_json FROM servers WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) GetServerByID(ctx context.Context, id int64) (Server, error) {
@@ -454,8 +497,20 @@ func (q *Queries) GetServerByID(ctx context.Context, id int64) (Server, error) {
 		&i.FactsJson,
 		&i.LastHeartbeatAt,
 		&i.CreatedAt,
+		&i.LastDiscoveryJson,
 	)
 	return i, err
+}
+
+const getServerDiscovery = `-- name: GetServerDiscovery :one
+SELECT last_discovery_json FROM servers WHERE id = ?
+`
+
+func (q *Queries) GetServerDiscovery(ctx context.Context, id int64) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, getServerDiscovery, id)
+	var last_discovery_json sql.NullString
+	err := row.Scan(&last_discovery_json)
+	return last_discovery_json, err
 }
 
 const heartbeat = `-- name: Heartbeat :exec
@@ -588,7 +643,7 @@ func (q *Queries) ListJobLogs(ctx context.Context, arg ListJobLogsParams) ([]Job
 }
 
 const listJobsForDeploy = `-- name: ListJobsForDeploy :many
-SELECT id, deploy_id, seq, server_id, type, params_json, lock_key, status, attempt, max_attempts, cancel_requested, lease_expires_at, claimed_at, started_at, finished_at, exit_code, error, result_json, created_at FROM jobs WHERE deploy_id = ? ORDER BY seq, id
+SELECT id, deploy_id, seq, server_id, type, params_json, lock_key, status, attempt, max_attempts, cancel_requested, lease_expires_at, claimed_at, started_at, finished_at, exit_code, error, result_json, created_at, lock_key2 FROM jobs WHERE deploy_id = ? ORDER BY seq, id
 `
 
 func (q *Queries) ListJobsForDeploy(ctx context.Context, deployID sql.NullInt64) ([]Job, error) {
@@ -620,6 +675,7 @@ func (q *Queries) ListJobsForDeploy(ctx context.Context, deployID sql.NullInt64)
 			&i.Error,
 			&i.ResultJson,
 			&i.CreatedAt,
+			&i.LockKey2,
 		); err != nil {
 			return nil, err
 		}
@@ -697,11 +753,14 @@ func (q *Queries) ListRecentDeploys(ctx context.Context, limit int64) ([]ListRec
 const lockHeld = `-- name: LockHeld :one
 SELECT COUNT(*) AS held
 FROM jobs
-WHERE lock_key = ? AND status IN ('ready','claimed','running')
+WHERE (lock_key = ?1 OR lock_key2 = ?1)
+  AND status IN ('ready','claimed','running')
 `
 
-func (q *Queries) LockHeld(ctx context.Context, lockKey sql.NullString) (int64, error) {
-	row := q.db.QueryRowContext(ctx, lockHeld, lockKey)
+// A lock key is held if it appears in EITHER lock column of any active job, so
+// that a two-lock job and a one-lock job contend correctly on a shared key.
+func (q *Queries) LockHeld(ctx context.Context, key sql.NullString) (int64, error) {
+	row := q.db.QueryRowContext(ctx, lockHeld, key)
 	var held int64
 	err := row.Scan(&held)
 	return held, err
@@ -728,7 +787,7 @@ func (q *Queries) PromoteJob(ctx context.Context, id int64) error {
 }
 
 const readyJobsToPromote = `-- name: ReadyJobsToPromote :many
-SELECT j.id, j.server_id, j.lock_key, j.deploy_id, j.seq
+SELECT j.id, j.server_id, j.lock_key, j.lock_key2, j.deploy_id, j.seq
 FROM jobs j
 WHERE j.status = 'queued'
 ORDER BY j.deploy_id, j.seq, j.id
@@ -738,11 +797,13 @@ type ReadyJobsToPromoteRow struct {
 	ID       int64          `json:"id"`
 	ServerID int64          `json:"server_id"`
 	LockKey  sql.NullString `json:"lock_key"`
+	LockKey2 sql.NullString `json:"lock_key2"`
 	DeployID sql.NullInt64  `json:"deploy_id"`
 	Seq      int64          `json:"seq"`
 }
 
 // Candidate queued jobs with no earlier unfinished sibling and a free lock.
+// A job may carry two locks (lock_key, lock_key2); both must be free to promote.
 func (q *Queries) ReadyJobsToPromote(ctx context.Context) ([]ReadyJobsToPromoteRow, error) {
 	rows, err := q.db.QueryContext(ctx, readyJobsToPromote)
 	if err != nil {
@@ -756,6 +817,7 @@ func (q *Queries) ReadyJobsToPromote(ctx context.Context) ([]ReadyJobsToPromoteR
 			&i.ID,
 			&i.ServerID,
 			&i.LockKey,
+			&i.LockKey2,
 			&i.DeployID,
 			&i.Seq,
 		); err != nil {
@@ -788,6 +850,22 @@ UPDATE deploys SET status = 'running' WHERE id = ? AND status = 'queued'
 
 func (q *Queries) SetDeployRunning(ctx context.Context, id int64) error {
 	_, err := q.db.ExecContext(ctx, setDeployRunning, id)
+	return err
+}
+
+const setServerDiscovery = `-- name: SetServerDiscovery :exec
+UPDATE servers SET last_discovery_json = ? WHERE id = ?
+`
+
+type SetServerDiscoveryParams struct {
+	LastDiscoveryJson sql.NullString `json:"last_discovery_json"`
+	ID                int64          `json:"id"`
+}
+
+// Stash the most recent file-only discovery push from the agent so Refresh can
+// re-import on demand.
+func (q *Queries) SetServerDiscovery(ctx context.Context, arg SetServerDiscoveryParams) error {
+	_, err := q.db.ExecContext(ctx, setServerDiscovery, arg.LastDiscoveryJson, arg.ID)
 	return err
 }
 

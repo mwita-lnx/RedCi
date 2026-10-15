@@ -114,11 +114,40 @@ func (s *Server) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		FactsJson:    nullStr(string(factsJSON)),
 		ID:           srv.ID,
 	})
+	// Keep the raw payload in memory for the live per-server heartbeat view.
+	s.recordHeartbeat(srv.ID, HeartbeatRecord{
+		At:           time.Now().Unix(),
+		AgentVersion: req.AgentVersion,
+		RunningJobID: req.RunningJobID,
+		Facts:        json.RawMessage(factsJSON),
+	})
 	if req.RunningJobID != 0 {
 		_ = s.db.WriteQ.RenewLease(r.Context(), req.RunningJobID)
 	}
 	cancelIDs, _ := s.db.ReadQ.ListCancelRequestedForServer(r.Context(), srv.ID)
 	writeJSON(w, http.StatusOK, protocol.HeartbeatResponse{Cancel: cancelIDs})
+}
+
+// handleAgentDiscovery accepts the agent's periodic file-only discovery push and
+// reconciles benches/sites immediately — so new sites appear (and creating→active
+// flips) on their own, without an operator clicking Refresh.
+func (s *Server) handleAgentDiscovery(w http.ResponseWriter, r *http.Request) {
+	srv, _ := agentFrom(r.Context())
+	var req protocol.DiscoveryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if len(req.Result) > 0 {
+		// Stash the latest push so a manual Refresh can re-import on demand.
+		_ = s.db.WriteQ.SetServerDiscovery(r.Context(), store.SetServerDiscoveryParams{
+			LastDiscoveryJson: nullStr(string(req.Result)), ID: srv.ID,
+		})
+		if _, _, err := s.ImportDiscoveredResult(r.Context(), srv.ID, req.Result); err != nil {
+			s.log.Warn("discovery push import failed", "server", srv.ID, "err", err)
+		}
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // handleAgentJobsNext claims the next ready job for this server, long-polling
@@ -244,6 +273,12 @@ func (s *Server) handleAgentJobResult(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Web app deploys: update current/previous commit + status on the web_app row.
+	if job.Type == string(jobs.TypeDeployWebApp) || job.Type == string(jobs.TypeRollbackWebApp) {
+		s.recordWebAppResult(r.Context(), job, status)
+	}
+	// Discovery is reconciled from the agent's periodic push (POST
+	// /agent/v1/discovery), so there is no job-success import hook anymore.
 	s.publishStatus(id, status)
 	s.bus.Publish(events.Event{JobID: id, Kind: events.KindDone})
 	w.WriteHeader(http.StatusOK)
@@ -289,6 +324,45 @@ func (s *Server) recordFrappeDeployPoint(ctx context.Context, job store.Job, raw
 		PreviousCommit: nullStr(res.PrevCommit),
 		CurrentCommit:  nullStr(res.Commit),
 		BenchID:        benchID, AppName: res.App,
+	})
+}
+
+// recordWebAppResult updates a web app's commit + status after a deploy/rollback
+// job finishes. On success it advances current_commit (saving the old one as
+// previous_commit, so rollback has a target) and marks it running; on failure it
+// marks the app failed. Best-effort.
+func (s *Server) recordWebAppResult(ctx context.Context, job store.Job, status string) {
+	if !job.DeployID.Valid {
+		return
+	}
+	dep, err := s.db.ReadQ.GetDeploy(ctx, job.DeployID.Int64)
+	if err != nil || dep.TargetType != "web_app" {
+		return
+	}
+	wa, err := s.db.ReadQ.GetWebApp(ctx, dep.TargetID)
+	if err != nil {
+		return
+	}
+	if status != "succeeded" {
+		_ = s.db.WriteQ.SetWebAppStatus(ctx, store.SetWebAppStatusParams{Status: "failed", ID: wa.ID})
+		return
+	}
+	commit := dep.CommitSha.String
+	if commit == "" {
+		// Nothing to record, but the app is up — mark running.
+		_ = s.db.WriteQ.SetWebAppStatus(ctx, store.SetWebAppStatusParams{Status: "running", ID: wa.ID})
+		return
+	}
+	// previous = whatever was current before this deploy (skip on a rollback,
+	// which is itself a restore of the previous commit).
+	prev := wa.CurrentCommit
+	if job.Type == string(jobs.TypeRollbackWebApp) {
+		prev = wa.PreviousCommit
+	}
+	_ = s.db.WriteQ.SetWebAppCommit(ctx, store.SetWebAppCommitParams{
+		CurrentCommit:  nullStr(commit),
+		PreviousCommit: prev,
+		ID:             wa.ID,
 	})
 }
 

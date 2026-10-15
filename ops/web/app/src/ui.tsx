@@ -26,8 +26,8 @@ export function Button({ variant = "primary", size = "md", loading, children, cl
   );
 }
 
-export function Modal({ title, description, children, onClose }: {
-  title: string; description?: string; children: ReactNode; onClose: () => void;
+export function Modal({ title, description, children, onClose, wide }: {
+  title: string; description?: string; children: ReactNode; onClose: () => void; wide?: boolean;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -36,7 +36,7 @@ export function Modal({ title, description, children, onClose }: {
   }, [onClose]);
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className={`modal${wide ? " wide" : ""}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h3>{title}</h3>
           {description && <p>{description}</p>}

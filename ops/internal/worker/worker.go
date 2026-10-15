@@ -85,8 +85,9 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-// expireLeases: claimed/running jobs past their lease become lost; their deploy
-// is handled by finishDeploys on the next pass.
+// expireLeases: claimed/running jobs past their lease become lost; ready jobs
+// older than 5 minutes that no agent claimed also become lost. finishDeploys
+// picks up the resulting terminal state on the next pass.
 func (w *Worker) expireLeases(ctx context.Context) error {
 	lost, err := w.db.WriteQ.ExpireLeases(ctx, nullInt(time.Now().Unix()))
 	if err != nil {
@@ -94,6 +95,17 @@ func (w *Worker) expireLeases(ctx context.Context) error {
 	}
 	for _, j := range lost {
 		w.log.Warn("job lease expired", "job", j.ID, "server", j.ServerID)
+		w.bus.Publish(events.Event{JobID: j.ID, Kind: events.KindStatus, Status: "lost"})
+		w.bus.Publish(events.Event{JobID: j.ID, Kind: events.KindDone})
+	}
+
+	cutoff := time.Now().Add(-5 * time.Minute).Unix()
+	stale, err := w.db.WriteQ.ExpireStaleReady(ctx, cutoff)
+	if err != nil {
+		return err
+	}
+	for _, j := range stale {
+		w.log.Warn("ready job abandoned", "job", j.ID)
 		w.bus.Publish(events.Event{JobID: j.ID, Kind: events.KindStatus, Status: "lost"})
 		w.bus.Publish(events.Event{JobID: j.ID, Kind: events.KindDone})
 	}
@@ -125,15 +137,15 @@ func (w *Worker) promote(ctx context.Context) error {
 				continue
 			}
 		}
-		// Lock must be free.
-		if c.LockKey.Valid && c.LockKey.String != "" {
-			held, err := w.db.ReadQ.LockHeld(ctx, c.LockKey)
-			if err != nil {
-				return err
-			}
-			if held > 0 {
-				continue
-			}
+		// Both locks (if set) must be free. A key is held when it appears in
+		// either lock column of any active job, so a two-lock job and a
+		// one-lock job contend correctly on a shared key.
+		locked, err := w.anyLockHeld(ctx, c.LockKey, c.LockKey2)
+		if err != nil {
+			return err
+		}
+		if locked {
+			continue
 		}
 		if err := w.db.WriteQ.PromoteJob(ctx, c.ID); err != nil {
 			return err
@@ -144,6 +156,24 @@ func (w *Worker) promote(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// anyLockHeld reports whether either of a candidate's locks is currently held by
+// an active job. Empty/NULL locks are ignored.
+func (w *Worker) anyLockHeld(ctx context.Context, keys ...sql.NullString) (bool, error) {
+	for _, k := range keys {
+		if !k.Valid || k.String == "" {
+			continue
+		}
+		held, err := w.db.ReadQ.LockHeld(ctx, k)
+		if err != nil {
+			return false, err
+		}
+		if held > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // finishDeploys: a deploy succeeds when all its jobs succeeded; it fails (and

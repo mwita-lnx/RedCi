@@ -14,11 +14,6 @@ type SecretRef string
 // secret (the agent sees resolved values; the stored params never do).
 func (s SecretRef) IsRef() bool { return strings.HasPrefix(string(s), "secret:") }
 
-// ServerStatusParams has no inputs.
-type ServerStatusParams struct{}
-
-func (ServerStatusParams) Validate([]string) error { return nil }
-
 // ListNginxConfigsParams has no inputs.
 type ListNginxConfigsParams struct{}
 
@@ -26,13 +21,16 @@ func (ListNginxConfigsParams) Validate([]string) error { return nil }
 
 // NewSiteParams drives `new_site`.
 type NewSiteParams struct {
-	BenchPath      string    `json:"bench_path"`
-	Domain         string    `json:"domain"`
-	Apps           []string  `json:"apps"`
-	AdminPassword  SecretRef `json:"admin_password"`
-	DBRootUser     string    `json:"db_root_user"`
-	DBRootPassword SecretRef `json:"db_root_password"`
-	WithSSL        bool      `json:"with_ssl"`
+	BenchPath      string            `json:"bench_path"`
+	Domain         string            `json:"domain"`
+	Apps           []string          `json:"apps"`
+	AdminPassword  SecretRef         `json:"admin_password"`
+	DBRootUser     string            `json:"db_root_user"`
+	DBRootPassword SecretRef         `json:"db_root_password"`
+	WithSSL        bool              `json:"with_ssl"`
+	// Config is extra site_config.json keys applied after install (Press's
+	// site.update_config). Optional; nil means none.
+	Config map[string]string `json:"config,omitempty"`
 }
 
 func (p NewSiteParams) Validate(roots []string) error {
@@ -98,6 +96,28 @@ type InstallAppParams struct {
 }
 
 func (p InstallAppParams) Validate(roots []string) error {
+	if err := ValidatePathUnder(p.BenchPath, roots); err != nil {
+		return err
+	}
+	if err := ValidateDomain(p.Site); err != nil {
+		return err
+	}
+	return ValidateAppName(p.App)
+}
+
+// UninstallAppParams drives `uninstall_app`: remove an app from a single site's
+// database (bench --site <site> uninstall-app <app> --yes). It does NOT delete
+// the app code from the bench — other sites may still use it.
+type UninstallAppParams struct {
+	BenchPath string `json:"bench_path"`
+	Site      string `json:"site"`
+	App       string `json:"app"`
+	// Force skips the dependency/linked-doc safety check (bench --force). Off by
+	// default so an accidental uninstall of a depended-on app is refused.
+	Force bool `json:"force"`
+}
+
+func (p UninstallAppParams) Validate(roots []string) error {
 	if err := ValidatePathUnder(p.BenchPath, roots); err != nil {
 		return err
 	}

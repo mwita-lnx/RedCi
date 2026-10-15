@@ -99,24 +99,34 @@ func TestEnrollClaimRunReport(t *testing.T) {
 		t.Fatalf("job final status = %q, want succeeded", final)
 	}
 
-	// 7. Logs have the step marker and no plaintext secret.
+	// 7. Logs have the expected step markers and no plaintext secret.
+	// new_site is now a single Press-style job: create site, install app(s)
+	// (with a --force fallback line in dry-run), enable scheduler, setup nginx.
 	lines, _ := panel.JobLogLines(ctx, jobID)
-	var sawStep, sawSecret bool
+	var sawCreate, sawInstall, sawScheduler, sawNginx, sawFallback, sawSecret bool
 	for _, l := range lines {
-		if strings.Contains(l, "== step: create site") {
-			sawStep = true
+		switch {
+		case strings.Contains(l, "== step: create site"):
+			sawCreate = true
+		case strings.Contains(l, "== step: install app erpnext"):
+			sawInstall = true
+		case strings.Contains(l, "== step: enable scheduler"):
+			sawScheduler = true
+		case strings.Contains(l, "== step: setup nginx"):
+			sawNginx = true
+		case strings.Contains(l, "fallback on"):
+			sawFallback = true
 		}
 		if strings.Contains(l, "ADMINPW") || strings.Contains(l, "DBPW") {
 			sawSecret = true
 		}
 	}
-	if !sawStep {
-		t.Errorf("expected a 'create site' step marker; got %d lines: %v", len(lines), lines)
+	if !sawCreate || !sawInstall || !sawScheduler || !sawNginx {
+		t.Errorf("missing expected step markers (create=%v install=%v scheduler=%v nginx=%v); lines: %v",
+			sawCreate, sawInstall, sawScheduler, sawNginx, lines)
 	}
-	// new_site is now 2 steps (create site + install one app); dry-run emits a
-	// step marker and a dry-run line per step = 4 lines.
-	if len(lines) != 4 {
-		t.Errorf("expected 4 log lines (2 markers + 2 dry-run), got %d: %v", len(lines), lines)
+	if !sawFallback {
+		t.Errorf("expected a --force fallback dry-run line; lines: %v", lines)
 	}
 	if sawSecret {
 		t.Error("plaintext secret leaked into logs")

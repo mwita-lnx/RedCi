@@ -2,14 +2,28 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiGet, apiPost, atLeast, Site } from "../api";
+import { apiGet, apiPost, atLeast, AppInfo, Site } from "../api";
 import { Button, Empty, Modal, PageHeader, PanelBox } from "../ui";
+
+// sha shortens a git commit to 7 chars.
+function sha(s: string): string { return s ? s.slice(0, 7) : ""; }
+
+// appStatus renders an up-to-date / behind / unknown badge for an app by
+// comparing its bench HEAD to the remote latest.
+function appStatus(a: AppInfo) {
+  if (!a.bench_commit || !a.remote_commit) return <span className="muted">—</span>;
+  return a.up_to_date
+    ? <span className="badge healthy">up to date</span>
+    : <span className="badge failed">behind</span>;
+}
 
 export function SiteDetailPage({ role }: { role?: string }) {
   const { id } = useParams();
   const qc = useQueryClient();
   const nav = useNavigate();
-  const { data: site, isLoading } = useQuery({ queryKey: ["site", id], queryFn: () => apiGet<Site>(`/sites/${id}`) });
+  // Poll: the remote-latest commit is fetched server-side per load, so refetch
+  // keeps the "up to date / behind" state fresh without a manual reload.
+  const { data: site, isLoading } = useQuery({ queryKey: ["site", id], queryFn: () => apiGet<Site>(`/sites/${id}`), refetchInterval: 30_000 });
   const [showDelete, setShowDelete] = useState(false);
   const canDeploy = atLeast(role ?? "", "deployer");
   const canAdmin = atLeast(role ?? "", "admin");
@@ -50,12 +64,33 @@ export function SiteDetailPage({ role }: { role?: string }) {
           <Empty>No apps recorded. Run a refresh to discover them.</Empty>
         ) : (
           <table>
-            <thead><tr><th>App</th><th>Version</th><th></th></tr></thead>
+            <thead>
+              <tr>
+                <th>App</th>
+                <th>Branch</th>
+                <th>Bench commit</th>
+                <th>Remote latest</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
             <tbody>
               {site.apps.map((a) => (
                 <tr key={a.name}>
-                  <td style={{ fontWeight: 550 }}>{a.name}</td>
-                  <td className="mono">{a.version || <span className="muted">unknown</span>}</td>
+                  <td style={{ fontWeight: 550 }}>
+                    {a.name}
+                    {a.repo && <div className="muted" style={{ fontSize: 11 }}>{a.repo}</div>}
+                  </td>
+                  <td className="mono">{a.branch || <span className="muted">—</span>}</td>
+                  <td className="mono">{sha(a.bench_commit) || <span className="muted">{a.version || "—"}</span>}</td>
+                  <td className="mono">
+                    {a.remote_commit
+                      ? (a.repo
+                          ? <a href={`https://github.com/${a.repo}/commit/${a.remote_commit}`} target="_blank" rel="noreferrer" className="mono">{sha(a.remote_commit)}</a>
+                          : sha(a.remote_commit))
+                      : <span className="muted">—</span>}
+                  </td>
+                  <td>{appStatus(a)}</td>
                   <td className="row-actions">
                     {canDeploy && a.rollbackable && (
                       <Button variant="secondary" size="sm"

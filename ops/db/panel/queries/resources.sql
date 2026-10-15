@@ -59,6 +59,12 @@ UPDATE frappe_apps SET current_commit = ? WHERE bench_id = ? AND app_name = ?;
 UPDATE frappe_apps SET previous_commit = ?, current_commit = ?
 WHERE bench_id = ? AND app_name = ?;
 
+-- name: SetFrappeAppGit :exec
+-- Store the git state the agent read off the bench's apps/<name>/.git.
+UPDATE frappe_apps
+SET git_commit = ?, git_branch = ?, git_remote = ?
+WHERE bench_id = ? AND app_name = ?;
+
 -- name: UpsertDeployPoint :exec
 INSERT INTO frappe_deploy_points (bench_id, app_name, prev_commit, backups_json)
 VALUES (?, ?, ?, ?)
@@ -105,8 +111,9 @@ SELECT * FROM sites WHERE bench_id = ? ORDER BY domain;
 -- Web apps -------------------------------------------------------------------
 
 -- name: CreateWebApp :one
-INSERT INTO web_apps (server_id, app_source_id, name, internal_port, container_port, health_path, env_enc, status)
-VALUES (?, ?, ?, ?, ?, ?, ?, 'new')
+INSERT INTO web_apps (server_id, name, runtime, repo, url, branch, auto_deploy,
+                      internal_port, container_port, health_path, dockerfile_path, env_enc, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')
 RETURNING *;
 
 -- name: ListWebApps :many
@@ -127,11 +134,23 @@ UPDATE web_apps SET status = ? WHERE id = ?;
 -- name: SetWebAppCommit :exec
 UPDATE web_apps SET current_commit = ?, previous_commit = ?, status = 'running' WHERE id = ?;
 
+-- name: DeleteWebApp :exec
+DELETE FROM web_apps WHERE id = ?;
+
 -- Proxy routes ---------------------------------------------------------------
 
 -- name: CreateProxyRoute :one
 INSERT INTO proxy_routes (server_id, domain, upstream, web_app_id, ssl_enabled, extra_snippet, status)
 VALUES (?, ?, ?, ?, ?, ?, 'pending')
+RETURNING *;
+
+-- name: CreateProxyRouteModelB :one
+-- Create a Model B (path-split) route carrying its locations/frappe_site/static/
+-- aliases spec.
+INSERT INTO proxy_routes (server_id, domain, upstream, web_app_id, ssl_enabled,
+                          extra_snippet, locations_json, frappe_site, static_root,
+                          aliases_json, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
 RETURNING *;
 
 -- name: ListProxyRoutes :many

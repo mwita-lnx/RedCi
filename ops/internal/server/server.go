@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -40,6 +41,50 @@ type Server struct {
 	// when it promotes a job so a waiting long-poll returns immediately.
 	notifyMu sync.Mutex
 	notify   map[int64]chan struct{}
+
+	// hbMu guards hbLog: a small in-memory ring of recent heartbeat payloads
+	// per server, so the UI can show heartbeats live as they arrive. Ephemeral
+	// by design — not persisted.
+	hbMu  sync.Mutex
+	hbLog map[int64][]HeartbeatRecord
+}
+
+// HeartbeatRecord is one received heartbeat, kept in memory for the live view.
+type HeartbeatRecord struct {
+	At           int64           `json:"at"` // unix seconds received
+	AgentVersion string          `json:"agent_version"`
+	RunningJobID int64           `json:"running_job_id"`
+	Facts        json.RawMessage `json:"facts"`
+}
+
+// maxHeartbeatsPerServer bounds the in-memory ring.
+const maxHeartbeatsPerServer = 50
+
+// recordHeartbeat appends a heartbeat to the per-server ring (newest last),
+// trimming to the most recent maxHeartbeatsPerServer.
+func (s *Server) recordHeartbeat(serverID int64, rec HeartbeatRecord) {
+	s.hbMu.Lock()
+	defer s.hbMu.Unlock()
+	if s.hbLog == nil {
+		s.hbLog = make(map[int64][]HeartbeatRecord)
+	}
+	log := append(s.hbLog[serverID], rec)
+	if len(log) > maxHeartbeatsPerServer {
+		log = log[len(log)-maxHeartbeatsPerServer:]
+	}
+	s.hbLog[serverID] = log
+}
+
+// recentHeartbeats returns the per-server ring, newest first.
+func (s *Server) recentHeartbeats(serverID int64) []HeartbeatRecord {
+	s.hbMu.Lock()
+	defer s.hbMu.Unlock()
+	src := s.hbLog[serverID]
+	out := make([]HeartbeatRecord, len(src))
+	for i, r := range src {
+		out[len(src)-1-i] = r // reverse → newest first
+	}
+	return out
 }
 
 // Nudger lets the server ask the worker to run its passes immediately (e.g.

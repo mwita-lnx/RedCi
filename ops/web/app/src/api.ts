@@ -56,7 +56,16 @@ export interface Site {
   id: number; domain: string; status: string; ssl: boolean; bench_id: number;
   apps?: AppInfo[];
 }
-export interface AppInfo { name: string; version: string; rollbackable: boolean }
+export interface AppInfo {
+  name: string;
+  version: string;
+  branch: string;
+  bench_commit: string;
+  remote_commit: string;
+  repo: string;
+  up_to_date: boolean;
+  rollbackable: boolean;
+}
 
 export interface Bench { id: number; name: string; path: string; server_id: number }
 
@@ -98,12 +107,13 @@ export interface MatrixRow {
 }
 export interface BenchApp {
   name: string;
-  current_commit: string;
+  current_commit: string;   // __version__ string from disk (e.g. "0.0.1")
   previous_commit: string;
+  bench_commit: string;     // real git HEAD SHA on the bench
   app_source_id: number | null;
   repo: string;
   branch: string;
-  latest_commit: string;
+  latest_commit: string;    // latest commit on the remote branch
   kind: string;
   auto_deploy: boolean;
 }
@@ -138,12 +148,44 @@ export interface Fleet {
   attention: { level: string; server: string; title: string; detail: string }[];
 }
 
+export interface Heartbeat {
+  at: number;
+  agent_version: string;
+  running_job_id: number;
+  facts: Record<string, unknown>;
+}
+
 export interface GithubStatus { connected: boolean; login?: string; error?: string }
 export interface GhRepo { full_name: string; private: boolean; default_branch: string }
 export interface GhBranch { name: string; sha: string }
 export interface GhCommit { sha: string; message: string; author: string; date: string }
-export interface WebApp { id: number; name: string; internal_port: number; status: string; commit: string }
-export interface Route { id: number; domain: string; upstream: string; ssl: boolean; status: string }
+export interface WebApp {
+  id: number; name: string; runtime: string;
+  server_id: number; server_name: string;
+  repo: string; url: string; branch: string; source: string;
+  internal_port: number; container_port: number; health_path: string;
+  auto_deploy: boolean; status: string; commit: string; previous_commit: string;
+}
+export interface RouteLocation {
+  path: string;
+  match?: "prefix" | "exact" | "regex";
+  action: "proxy" | "filesystem" | "redirect";
+  target: string;
+  websocket?: boolean;
+  frappe_proxy?: boolean;
+}
+export interface Route {
+  id: number; domain: string; upstream: string; ssl: boolean; status: string;
+  kind?: "proxy" | "frontend-split";
+  locations?: RouteLocation[];
+  aliases?: string[];
+  frappe_site?: string;
+  static_root?: string;
+  snippet?: string;
+  config_hash?: string;
+  config?: string;
+  server_id?: number;
+}
 export interface User { id: number; email: string; role: string; disabled: boolean }
 export interface Audit {
   id: number; actor: string; action: string; object_type: string;

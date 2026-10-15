@@ -25,6 +25,9 @@ var (
 	repoRE = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 	// branch: a conservative git ref (no spaces, no shell metacharacters, no ..).
 	branchRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+	// git clone URL: https://host/path(.git) or scp-style git@host:path(.git).
+	// Deliberately conservative — only characters safe to pass to `bench get-app`.
+	gitURLRE = regexp.MustCompile(`^(?:https://[A-Za-z0-9._-]+(?::[0-9]{2,5})?/[A-Za-z0-9._/-]+|git@[A-Za-z0-9._-]+:[A-Za-z0-9._/-]+)(?:\.git)?$`)
 )
 
 // validateRepo checks an owner/name GitHub repo identifier.
@@ -33,6 +36,34 @@ func validateRepo(r string) error {
 		return fmt.Errorf("repo %q: invalid (want owner/name)", r)
 	}
 	return nil
+}
+
+// ValidateGitURL checks a git clone URL (https or scp-style). It rejects shell
+// metacharacters and anything but a plain repository URL, since the value is
+// passed to `bench get-app`.
+func ValidateGitURL(u string) error {
+	if len(u) == 0 || len(u) > 300 || !gitURLRE.MatchString(u) {
+		return fmt.Errorf("git url %q: invalid (want https://host/owner/name or git@host:owner/name)", u)
+	}
+	return nil
+}
+
+// ValidateFetchSource checks the source fields of an app to fetch onto a bench:
+// a valid app name, a valid branch, and exactly a repo (owner/name) OR a full
+// git URL. The panel calls this up front so bad input is rejected before a
+// deploy is created (the agent re-validates at run time).
+func ValidateFetchSource(app, repo, url, branch string) error {
+	if err := ValidateAppName(app); err != nil {
+		return err
+	}
+	if url != "" {
+		if err := ValidateGitURL(url); err != nil {
+			return err
+		}
+	} else if err := validateRepo(repo); err != nil {
+		return err
+	}
+	return validateBranch(branch)
 }
 
 // validateBranch checks a git branch/ref name.

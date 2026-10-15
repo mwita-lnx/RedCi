@@ -14,6 +14,7 @@ import { PipelinesPage } from "./pages/Pipelines";
 import { PipelineDetailPage } from "./pages/PipelineDetail";
 import { BenchesSitesPage } from "./pages/BenchesSites";
 import { FleetPage } from "./pages/Fleet";
+import { FleetServerDetailPage } from "./pages/FleetServerDetail";
 import { SettingsPage } from "./pages/Settings";
 
 // Primary nav mirrors the product mockups.
@@ -60,12 +61,13 @@ export function App() {
           <Route path="/pipelines/:id" element={<PipelineDetailPage role={me?.role} />} />
           <Route path="/benches" element={<BenchesSitesPage role={me?.role} />} />
           <Route path="/fleet" element={<FleetPage role={me?.role} />} />
+          <Route path="/fleet/:id" element={<FleetServerDetailPage />} />
           <Route path="/sites/:id" element={<SiteDetailPage role={me?.role} />} />
           <Route path="/deploys" element={<DeploysPage />} />
           <Route path="/jobs/:id" element={<JobPage />} />
           <Route path="/servers" element={<ServersPage role={me?.role} />} />
           <Route path="/benches/:id" element={<BenchDetailPage role={me?.role} />} />
-          <Route path="/web-apps" element={<WebAppsPage />} />
+          <Route path="/web-apps" element={<WebAppsPage role={me?.role} />} />
           <Route path="/routes" element={<RoutesPage role={me?.role} />} />
           <Route path="/settings" element={<SettingsPage role={me?.role} />} />
         </Routes>

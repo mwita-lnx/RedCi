@@ -12,11 +12,12 @@ import (
 
 // Env carries the agent-side dependencies a custom op needs.
 type Env struct {
-	Runner     *runner.Runner
-	Nginx      *nginx.Manager
-	AppsRoot   string
-	BenchRoots []string
-	NginxVer   string
+	Runner       *runner.Runner
+	Nginx        *nginx.Manager
+	AppsRoot     string
+	WebsitesRoot string
+	BenchRoots   []string
+	NginxVer     string
 }
 
 // Log is the sink custom ops write to (same shape as the runner's sink).
@@ -26,7 +27,7 @@ type Log func(stream, line string)
 // rather than the generic step runner.
 func IsCustom(t jobs.Type) bool {
 	switch t {
-	case jobs.TypeServerStatus, jobs.TypeListNginxConfigs,
+	case jobs.TypeListNginxConfigs,
 		jobs.TypeWriteProxyRoute, jobs.TypeDeleteProxyRoute,
 		jobs.TypeDeployWebApp, jobs.TypeRollbackWebApp,
 		jobs.TypeDeployFrappeApp, jobs.TypeRollbackFrappeApp:
@@ -56,8 +57,6 @@ func fail(err error) Result {
 // RunCustom dispatches a custom-op job. The caller has already validated params.
 func RunCustom(ctx context.Context, env Env, job protocol.Job, log Log) Result {
 	switch job.Type {
-	case jobs.TypeServerStatus:
-		return runServerStatus(ctx, env, log)
 	case jobs.TypeListNginxConfigs:
 		return runListNginx(env, log)
 	case jobs.TypeWriteProxyRoute:

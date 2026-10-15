@@ -18,7 +18,9 @@ type Config struct {
 	PanelURL     string   `toml:"panel_url"`
 	BenchRoots   []string `toml:"bench_roots"`
 	AppsRoot     string   `toml:"apps_root"`
+	WebsitesRoot string   `toml:"websites_root"` // where web apps live: <root>/<name>
 	BenchPathEnv string   `toml:"bench_path_env"`
+	HomeDir      string   `toml:"home_dir"` // $HOME for job steps (npm/pip/bench cache); empty = runner default
 	LogLevel     string   `toml:"log_level"`
 	CAFile       string   `toml:"ca_file"`          // optional pinned private CA
 	CredFile     string   `toml:"credential_file"`  // where the enrollment credential lives
@@ -34,6 +36,7 @@ type Credential struct {
 func Load() (Config, error) {
 	c := Config{
 		AppsRoot:     "/srv/ops/apps",
+		WebsitesRoot: "/srv/ops/websites",
 		LogLevel:     "info",
 		CredFile:     "/etc/ops-agent/credential",
 		BenchPathEnv: "/home/frappe/.local/bin",
@@ -53,8 +56,14 @@ func Load() (Config, error) {
 	if v := os.Getenv("OPS_AGENT_BENCH_PATH_ENV"); v != "" {
 		c.BenchPathEnv = v
 	}
+	if v := os.Getenv("OPS_AGENT_HOME"); v != "" {
+		c.HomeDir = v
+	}
 	if v := os.Getenv("OPS_AGENT_APPS_ROOT"); v != "" {
 		c.AppsRoot = v
+	}
+	if v := os.Getenv("OPS_AGENT_WEBSITES_ROOT"); v != "" {
+		c.WebsitesRoot = v
 	}
 	if v := os.Getenv("OPS_AGENT_CREDENTIAL"); v != "" {
 		c.CredFile = v

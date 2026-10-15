@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { apiGet, apiPost, atLeast, Fleet, FleetServer } from "../api";
@@ -139,7 +140,7 @@ function ServerCard({ s }: { s: FleetServer }) {
     </div>
   );
   return (
-    <div className={`srv-card ${cardCls}`}>
+    <Link to={`/fleet/${s.id}`} className={`srv-card ${cardCls}`} style={{ color: "inherit", textDecoration: "none" }}>
       <div className="srv-top">
         <div>
           <div className="srv-name"><span className={`sdot ${dotCls}`} />{s.name}</div>
@@ -156,7 +157,7 @@ function ServerCard({ s }: { s: FleetServer }) {
         <span>agent {s.agent_version || "—"}{s.benches ? ` · ${s.benches} bench${s.benches === 1 ? "" : "es"}` : ""}</span>
         <span>{s.online ? `up ${s.uptime_days}d` : "offline"}</span>
       </div>
-    </div>
+    </Link>
   );
 }
 

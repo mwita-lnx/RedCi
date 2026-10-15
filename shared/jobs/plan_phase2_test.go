@@ -81,6 +81,48 @@ func TestRenderRouteGolden(t *testing.T) {
 			data: RouteData{ID: 4, Domain: "d.example.com", Upstream: "http://127.0.0.1:3004", Snippet: "add_header X-Test 1;"},
 			want: []string{"add_header X-Test 1;"},
 		},
+		{
+			// Model B: Next.js + Frappe path split, mirroring the NGINX report §5.
+			name: "model B frontend-split",
+			data: RouteData{
+				ID: 5, Domain: "digital.example.com", SSL: true, HTTP2On: true,
+				FrappeSite: "digital.example.com",
+				StaticRoot: "/home/frappe/frappe-bench/sites",
+				Locations: []RouteLocation{
+					{Path: "/api/", Action: RouteActionProxy, Target: "http://127.0.0.1:8000", FrappeProxy: true},
+					{Path: "/assets", Action: RouteActionFilesystem},
+					{Path: "/socket.io/", Action: RouteActionProxy, Target: "http://127.0.0.1:9000", FrappeProxy: true, Websocket: true},
+					{Path: "/", Action: RouteActionProxy, Target: "http://127.0.0.1:3000"},
+				},
+			},
+			want: []string{
+				"location /api/ {",
+				"proxy_pass http://127.0.0.1:8000;",
+				"proxy_set_header X-Frappe-Site-Name digital.example.com;",
+				"location /assets {",
+				"root /home/frappe/frappe-bench/sites;",
+				"try_files $uri =404;",
+				"location /socket.io/ {",
+				"proxy_set_header Upgrade           $http_upgrade;", // ws on socket.io
+				"location / {",
+				"proxy_pass http://127.0.0.1:3000;",
+			},
+			// GOTCHA #4: the Next.js catch-all (/ -> :3000) must NOT force a
+			// Connection: upgrade. Only /socket.io/ opted in, so there must be
+			// exactly one Upgrade header in the whole file (asserted below).
+		},
+		{
+			name: "model B static-only location has no proxy headers",
+			data: RouteData{
+				ID: 6, Domain: "s.example.com",
+				Locations: []RouteLocation{
+					{Path: "/assets", Action: RouteActionFilesystem, Target: "/var/www"},
+					{Path: "/old", Action: RouteActionRedirect, Target: "https://new.example.com"},
+				},
+			},
+			want: []string{"root /var/www;", "return 301 https://new.example.com;"},
+			deny: []string{"proxy_pass", "Upgrade"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,6 +138,14 @@ func TestRenderRouteGolden(t *testing.T) {
 			for _, d := range tc.deny {
 				if strings.Contains(out, d) {
 					t.Errorf("unexpected %q in:\n%s", d, out)
+				}
+			}
+			// GOTCHA #4: in the frontend-split case only /socket.io/ opts into
+			// websockets, so the rendered vhost must carry exactly ONE Upgrade
+			// header — never on the Next.js catch-all.
+			if tc.name == "model B frontend-split" {
+				if n := strings.Count(out, "proxy_set_header Upgrade"); n != 1 {
+					t.Errorf("want exactly 1 Upgrade header (ws only on /socket.io/), got %d in:\n%s", n, out)
 				}
 			}
 		})

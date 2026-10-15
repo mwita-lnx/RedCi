@@ -41,6 +41,8 @@ export function DeploysPage() {
   });
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 25;
 
   const rows = data ?? [];
   const running = rows.filter((d) => d.status === "running");
@@ -55,19 +57,26 @@ export function DeploysPage() {
     cancelled: rows.filter((d) => d.status === "cancelled").length,
   }), [rows, running.length]);
 
-  const filtered = rows.filter((d) => matchFilter(filter, d.status) &&
-    (!q || `${d.kind} ${d.id} ${d.trigger} ${d.target_type}`.toLowerCase().includes(q.toLowerCase())));
+  const filtered = useMemo(() => rows.filter((d) => matchFilter(filter, d.status) &&
+    (!q || `${d.kind} ${d.id} ${d.trigger} ${d.target_type}`.toLowerCase().includes(q.toLowerCase()))),
+    [rows, filter, q]);
 
-  // group by day (already newest-first from API)
+  // reset to the first page whenever the filter/search changes the result set
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const curPage = Math.min(page, pageCount - 1);
+  const pageStart = curPage * PAGE_SIZE;
+  const paged = filtered.slice(pageStart, pageStart + PAGE_SIZE);
+
+  // group the current page by day (already newest-first from API)
   const groups = useMemo(() => {
     const m = new Map<string, Deploy[]>();
-    for (const d of filtered) {
+    for (const d of paged) {
       const k = dayKey(d.created_at);
       if (!m.has(k)) m.set(k, []);
       m.get(k)!.push(d);
     }
     return [...m.entries()];
-  }, [filtered]);
+  }, [paged]);
 
   // week stats
   const stats = useMemo(() => {
@@ -137,7 +146,7 @@ export function DeploysPage() {
           <div className="filterbar">
             <div className="search">
               <span className="mag">⌕</span>
-              <input type="text" placeholder="Kind, run #, trigger…" value={q} onChange={(e) => setQ(e.target.value)} />
+              <input type="text" placeholder="Kind, run #, trigger…" value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} />
             </div>
             <button className="selbtn">Pipeline ▾</button>
             <button className="selbtn">Trigger ▾</button>
@@ -146,7 +155,7 @@ export function DeploysPage() {
           <div className="filter-row2">
             <div className="rtabs">
               {(["all", "passed", "failed", "running", "cancelled"] as Filter[]).map((f) => (
-                <button key={f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
+                <button key={f} className={filter === f ? "on" : ""} onClick={() => { setFilter(f); setPage(0); }}>
                   {f[0].toUpperCase() + f.slice(1)} <span className="cnt">{counts[f]}</span>
                 </button>
               ))}
@@ -163,7 +172,18 @@ export function DeploysPage() {
               </tbody>
             </table>
           )}
-          <div style={{ padding: "12px 18px", fontSize: 12.5, color: "var(--text-muted)" }}>Showing {filtered.length} of {rows.length} runs</div>
+          <div className="pager">
+            <span className="pager-info">
+              {filtered.length === 0
+                ? "No runs"
+                : `${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, filtered.length)} of ${filtered.length}${filtered.length !== rows.length ? ` (filtered from ${rows.length})` : ""}`}
+            </span>
+            <div className="pager-ctrls">
+              <button className="selbtn" disabled={curPage === 0} onClick={() => setPage(curPage - 1)}>← Prev</button>
+              <span className="pager-page">Page {curPage + 1} / {pageCount}</span>
+              <button className="selbtn" disabled={curPage >= pageCount - 1} onClick={() => setPage(curPage + 1)}>Next →</button>
+            </div>
+          </div>
         </PanelBox>
 
         <div className="stack">
@@ -203,9 +223,9 @@ export function DeploysPage() {
 
           <PanelBox title="Saved views">
             <div className="saved-views">
-              <div className="sv" onClick={() => setFilter("failed")}><span className="sv-name">Failed runs</span><span className="sv-count">{counts.failed}</span></div>
-              <div className="sv" onClick={() => setFilter("running")}><span className="sv-name">In progress</span><span className="sv-count">{counts.running}</span></div>
-              <div className="sv" onClick={() => setFilter("all")}><span className="sv-name">All runs</span><span className="sv-count">{counts.all}</span></div>
+              <div className="sv" onClick={() => { setFilter("failed"); setPage(0); }}><span className="sv-name">Failed runs</span><span className="sv-count">{counts.failed}</span></div>
+              <div className="sv" onClick={() => { setFilter("running"); setPage(0); }}><span className="sv-name">In progress</span><span className="sv-count">{counts.running}</span></div>
+              <div className="sv" onClick={() => { setFilter("all"); setPage(0); }}><span className="sv-name">All runs</span><span className="sv-count">{counts.all}</span></div>
               <div className="sv-add" onClick={() => toast.message("Saved views coming soon")}>Save current filters</div>
             </div>
           </PanelBox>

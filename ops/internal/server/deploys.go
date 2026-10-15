@@ -16,6 +16,10 @@ type jobSeed struct {
 	typ      jobs.Type
 	params   any
 	lockKey  string
+	// lockKey2 is an optional second exclusive lock. A job is promoted only when
+	// BOTH locks are free. Used by new_site, which holds its bench lock and the
+	// shared nginx lock at once (it runs bench work and reloads nginx).
+	lockKey2 string
 }
 
 // createDeploy writes a deploy row and its ordered jobs (seq 0..n) atomically
@@ -53,6 +57,7 @@ func (s *Server) createDeploy(ctx context.Context, kind, targetType string, targ
 			Type:        string(seed.typ),
 			ParamsJson:  string(paramsJSON),
 			LockKey:     nullStr(seed.lockKey),
+			LockKey2:    nullStr(seed.lockKey2),
 			MaxAttempts: maxAttempts,
 		}); err != nil {
 			return 0, err
@@ -111,23 +116,13 @@ func (s *Server) deployFrappeAppForPush(ctx context.Context, src store.AppSource
 
 // deployWebAppForPush builds one deploy per web app built from the source.
 func (s *Server) deployWebAppForPush(ctx context.Context, src store.AppSource, commit string) (int, error) {
-	webApps, err := s.db.ReadQ.WebAppsForSource(ctx, src.ID)
+	webApps, err := s.db.ReadQ.WebAppsForSource(ctx, nullInt(src.ID))
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for _, wa := range webApps {
-		params := jobs.DeployWebAppParams{
-			Name:          wa.Name,
-			Repo:          src.Repo,
-			Branch:        src.Branch,
-			Commit:        commit,
-			InternalPort:  int(wa.InternalPort),
-			ContainerPort: int(wa.ContainerPort),
-			HealthPath:    wa.HealthPath,
-			Env:           jobs.SecretRef("secret:" + webAppEnvSecretName(wa.ID)),
-			CloneTok:      jobs.SecretRef("secret:" + cloneTokenSecretName),
-		}
+		params := s.webAppDeployParams(wa, commit)
 		if _, err := s.createDeploy(ctx, "web_app", "web_app", wa.ID, "webhook", commit, 0, []jobSeed{
 			{serverID: wa.ServerID, typ: jobs.TypeDeployWebApp, params: params, lockKey: webAppLock(wa.ID)},
 		}); err != nil {

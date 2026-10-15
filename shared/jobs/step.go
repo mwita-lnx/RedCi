@@ -14,6 +14,13 @@ type Step struct {
 	Timeout   time.Duration // per-step timeout; 0 = use the job timeout
 	Redact    []string      // substrings to replace with *** in logs
 	AlwaysRun bool          // run even after an earlier step failed (deferred cleanup)
+
+	// OnErrorContains + Fallback express a try/except in list form, mirroring
+	// Press's `install-app --force` → plain `install-app` recovery. If this step
+	// fails AND the captured output contains OnErrorContains, the runner runs
+	// Fallback instead of halting. Empty OnErrorContains means no fallback.
+	OnErrorContains string
+	Fallback        *Step
 }
 
 // Planner is implemented by job params that can produce a concrete step plan.
