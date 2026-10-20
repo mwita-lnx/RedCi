@@ -116,6 +116,15 @@ INSERT INTO web_apps (server_id, name, runtime, repo, url, branch, auto_deploy,
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')
 RETURNING *;
 
+-- name: CreateDiscoveredWebApp :one
+-- Insert a web app the agent discovered on disk (compose.yaml / ecosystem.config.js).
+-- status is 'running' because the runtime file proves it is deployed; container_port
+-- and health_path take their table defaults for the operator to adjust after import.
+INSERT INTO web_apps (server_id, name, runtime, repo, branch, internal_port,
+                      current_commit, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, 'running')
+RETURNING *;
+
 -- name: ListWebApps :many
 SELECT * FROM web_apps ORDER BY name;
 
@@ -152,6 +161,31 @@ INSERT INTO proxy_routes (server_id, domain, upstream, web_app_id, ssl_enabled,
                           aliases_json, status)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
 RETURNING *;
+
+-- name: CreateDiscoveredRoute :one
+-- Insert an unmanaged route discovered from an existing nginx vhost. upstream
+-- carries the file path for reference (it is NOT NULL and unused for unmanaged
+-- routes). ssl_enabled is best-effort inferred by the caller.
+INSERT INTO proxy_routes (server_id, domain, upstream, ssl_enabled, ssl_expires_at, status,
+                          managed, raw_config, nginx_path)
+VALUES (?, ?, ?, ?, ?, 'active', 0, ?, ?)
+RETURNING *;
+
+-- name: GetRouteByServerPath :one
+SELECT * FROM proxy_routes WHERE server_id = ? AND nginx_path = ? LIMIT 1;
+
+-- name: UpdateDiscoveredRoute :exec
+-- Refresh an unmanaged route's verbatim config + domain when the on-disk file
+-- changes. Only ever touches unmanaged (managed=0) rows.
+UPDATE proxy_routes
+SET domain = ?, raw_config = ?, ssl_enabled = ?, ssl_expires_at = ?
+WHERE id = ? AND managed = 0;
+
+-- name: RoutesForWebApp :many
+-- Routes linked to a web app (excludes deleted), newest-domain first.
+SELECT * FROM proxy_routes
+WHERE web_app_id = ? AND status != 'deleted'
+ORDER BY domain;
 
 -- name: ListProxyRoutes :many
 SELECT * FROM proxy_routes ORDER BY domain;

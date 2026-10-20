@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -425,6 +426,11 @@ func (s *Server) ApplyRoute(ctx context.Context, routeID int64, leEmail string, 
 	if err != nil {
 		return 0, err
 	}
+	if route.Managed == 0 {
+		// Unmanaged routes are discovered from existing nginx vhosts and shown
+		// read-only; RedCi must never re-render and overwrite a hand-tuned config.
+		return 0, fmt.Errorf("route %q is unmanaged (discovered from an existing nginx config); RedCi will not overwrite it", route.Domain)
+	}
 	ssl := route.SslEnabled != 0
 	snippet := ""
 	if route.ExtraSnippet.Valid {
@@ -459,17 +465,45 @@ func (s *Server) ApplyRoute(ctx context.Context, routeID int64, leEmail string, 
 // its id. It does not apply it — call ApplyRoute next. Locations empty = simple
 // single-upstream proxy; non-empty = a full path-split vhost.
 func (s *Server) CreateRoute(ctx context.Context, serverID int64, p jobs.WriteProxyRouteParams) (int64, error) {
+	return s.createRouteLinked(ctx, serverID, p, 0)
+}
+
+// CreateRouteForWebApp links a route to a registered web app: the upstream is
+// derived from the app's internal_port (127.0.0.1:<port>) so the panel is the
+// single source of truth, and web_app_id is persisted so the app and its nginx
+// config are connected both ways. The app must live on the same server.
+func (s *Server) CreateRouteForWebApp(ctx context.Context, webAppID int64, p jobs.WriteProxyRouteParams) (int64, error) {
+	app, err := s.db.ReadQ.GetWebApp(ctx, webAppID)
+	if err != nil {
+		return 0, fmt.Errorf("web app %d not found", webAppID)
+	}
+	// Auto-derive the upstream from the app's internal port (caller may leave it
+	// blank; an explicit upstream is honoured so the form can prefill+edit it).
+	if p.Upstream == "" {
+		p.Upstream = fmt.Sprintf("http://127.0.0.1:%d", app.InternalPort)
+	}
+	return s.createRouteLinked(ctx, app.ServerID, p, webAppID)
+}
+
+// createRouteLinked is the shared insert for CreateRoute / CreateRouteForWebApp.
+// webAppID == 0 means "no link" (stored as NULL).
+func (s *Server) createRouteLinked(ctx context.Context, serverID int64, p jobs.WriteProxyRouteParams, webAppID int64) (int64, error) {
 	if err := p.Validate(nil); err != nil {
 		return 0, err
 	}
 	if err := s.ensureDomainFree(ctx, serverID, p.Domain); err != nil {
 		return 0, err
 	}
+	link := sql.NullInt64{}
+	if webAppID > 0 {
+		link = sql.NullInt64{Int64: webAppID, Valid: true}
+	}
 	// The simple-mode upstream column still stores p.Upstream (may be empty in
 	// Model B); the catch-all in Model B lives in Locations instead.
 	if len(p.Locations) == 0 {
 		rt, err := s.db.WriteQ.CreateProxyRoute(ctx, store.CreateProxyRouteParams{
 			ServerID: serverID, Domain: p.Domain, Upstream: p.Upstream,
+			WebAppID:   link,
 			SslEnabled: boolToInt(p.SSL), ExtraSnippet: nullStr(p.Snippet),
 		})
 		if err != nil {
@@ -483,6 +517,7 @@ func (s *Server) CreateRoute(ctx context.Context, serverID int64, p jobs.WritePr
 		ServerID:      serverID,
 		Domain:        p.Domain,
 		Upstream:      p.Upstream,
+		WebAppID:      link,
 		SslEnabled:    boolToInt(p.SSL),
 		ExtraSnippet:  nullStr(p.Snippet),
 		LocationsJson: nullStr(string(locJSON)),
@@ -501,6 +536,13 @@ func (s *Server) DeleteRoute(ctx context.Context, routeID int64, userID int64) (
 	route, err := s.db.ReadQ.GetProxyRoute(ctx, routeID)
 	if err != nil {
 		return 0, err
+	}
+	if route.Managed == 0 {
+		// Never run a delete_proxy_route job for a discovered vhost: RedCi did not
+		// write that file and must not remove it. To stop tracking an unmanaged
+		// route, delete only its panel record (see ForgetRoute), which leaves the
+		// live nginx config on the server untouched.
+		return 0, fmt.Errorf("route %q is unmanaged (discovered); use Forget to remove it from the panel without touching nginx", route.Domain)
 	}
 	depID, err := s.createDeploy(ctx, "proxy_route", "route", route.ID, "ui", "", userID, []jobSeed{
 		{serverID: route.ServerID, typ: jobs.TypeDeleteProxyRoute,

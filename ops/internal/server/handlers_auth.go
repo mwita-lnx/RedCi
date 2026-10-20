@@ -16,9 +16,9 @@ func csrfField(r *http.Request) templComponent {
 }
 
 func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
-	// Already fully logged in? Go home.
+	// Already fully logged in? Go to the app.
 	if _, ok := s.currentUser(r.Context()); ok {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, "/app/", http.StatusSeeOther)
 		return
 	}
 	render(w, r, components.Login(csrfField(r), ""))
@@ -85,7 +85,7 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, user stor
 	// Audit with the user already in context.
 	ctx := withUser(r.Context(), user)
 	s.audit(r.WithContext(ctx), "user.login", "user", user.ID, "")
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/app/", http.StatusSeeOther)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

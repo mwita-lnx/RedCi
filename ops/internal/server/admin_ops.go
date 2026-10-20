@@ -15,15 +15,31 @@ func (s *Server) PutSecretForTest(ctx context.Context, name, value string) error
 	return s.putSecret(ctx, name, value)
 }
 
+// AdoptWebAppCommit records the commit a web app is already running on disk,
+// without a deploy — used to reflect the real state of an app that was deployed
+// outside RedCi (manual pm2/docker). It sets current_commit and flips status to
+// 'running'. previous_commit is left as-is (no prior RedCi deploy to point to).
+func (s *Server) AdoptWebAppCommit(ctx context.Context, webAppID int64, commit string) error {
+	wa, err := s.db.ReadQ.GetWebApp(ctx, webAppID)
+	if err != nil {
+		return err
+	}
+	return s.db.WriteQ.SetWebAppCommit(ctx, store.SetWebAppCommitParams{
+		CurrentCommit:  nullStr(commit),
+		PreviousCommit: wa.PreviousCommit,
+		ID:             wa.ID,
+	})
+}
+
 // CreateEnrollment adds a pending server and returns its one-time enrollment
 // token (shown once in the UI). Only the token's sha256 is stored.
 func (s *Server) CreateEnrollment(ctx context.Context, name, hostname string) (serverID int64, token string, err error) {
 	token, hash := newToken()
 	srv, err := s.db.WriteQ.CreateServer(ctx, store.CreateServerParams{
-		Name:                 name,
-		Hostname:             hostname,
-		EnrollmentTokenHash:  nullStr(hash),
-		EnrollmentExpiresAt:  nullInt(time.Now().Add(time.Hour).Unix()),
+		Name:                name,
+		Hostname:            hostname,
+		EnrollmentTokenHash: nullStr(hash),
+		EnrollmentExpiresAt: nullInt(time.Now().Add(time.Hour).Unix()),
 	})
 	if err != nil {
 		return 0, "", err

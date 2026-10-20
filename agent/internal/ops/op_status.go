@@ -56,11 +56,13 @@ type DiscoveredSite struct {
 
 // StatusResult is the result_json of a server_status job.
 type StatusResult struct {
-	NginxVersion  string            `json:"nginx_version"`
-	BenchVersion  string            `json:"bench_version"`
-	DockerVersion string            `json:"docker_version"`
-	DiskUsedPct   int               `json:"disk_used_pct"`
-	Benches       []DiscoveredBench `json:"benches"`
+	NginxVersion  string             `json:"nginx_version"`
+	BenchVersion  string             `json:"bench_version"`
+	DockerVersion string             `json:"docker_version"`
+	DiskUsedPct   int                `json:"disk_used_pct"`
+	Benches       []DiscoveredBench      `json:"benches"`
+	WebApps       []DiscoveredWebApp     `json:"web_apps,omitempty"`
+	NginxVhosts   []DiscoveredNginxVhost `json:"nginx_vhosts,omitempty"`
 }
 
 // DiscoverBenches does the cheap, file-only half of server_status: it walks the

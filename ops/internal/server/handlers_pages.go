@@ -4,33 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"time"
-
-	"github.com/mwita-lnx/RedCi/ops/internal/store"
-	"github.com/mwita-lnx/RedCi/ops/web/components"
 )
 
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	user, _ := userFrom(r.Context())
-	ctx := r.Context()
-	d := components.DashboardData{User: user}
-	d.Servers, _ = s.db.ReadQ.CountServers(ctx)
-	d.ServersOnline, _ = s.db.ReadQ.CountServersOnline(ctx)
-	d.Sites, _ = s.db.ReadQ.CountSites(ctx)
-	d.WebApps, _ = s.db.ReadQ.CountWebApps(ctx)
-	d.RunningJobs, _ = s.db.ReadQ.CountRunningJobs(ctx)
-
-	// Warnings.
-	d.ServersOffline, _ = s.db.ReadQ.CountServersOffline(ctx)
-	cutoff := time.Now().Add(14 * 24 * time.Hour).Unix()
-	d.CertsExpiring, _ = s.db.ReadQ.CountExpiringCerts(ctx, store.CountExpiringCertsParams{
-		SslExpiresAt: nullInt(cutoff), SslExpiresAt_2: nullInt(cutoff),
-	})
-	d.DisksLow = s.countLowDisk(ctx)
-	render(w, r, components.Dashboard(d))
-}
-
 // countLowDisk reads each server's facts_json and counts disk_used_pct > 80.
+// Used by the dashboard summary in the JSON API.
 func (s *Server) countLowDisk(ctx context.Context) int64 {
 	servers, err := s.db.ReadQ.ListServers(ctx)
 	if err != nil {
@@ -49,16 +26,6 @@ func (s *Server) countLowDisk(ctx context.Context) int64 {
 		}
 	}
 	return n
-}
-
-func (s *Server) handleAuditLog(w http.ResponseWriter, r *http.Request) {
-	user, _ := userFrom(r.Context())
-	rows, err := s.db.ReadQ.ListAudit(r.Context(), listAuditDefault())
-	if err != nil {
-		http.Error(w, "could not load audit log", http.StatusInternalServerError)
-		return
-	}
-	render(w, r, components.AuditLog(user, rows))
 }
 
 // handleHealthz reports basic liveness for an external uptime check. It pings

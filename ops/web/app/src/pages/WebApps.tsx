@@ -10,6 +10,25 @@ import { Badge, Button, Empty, Modal, PageHeader, PanelBox, TableSkeleton } from
 const RUNNING = ["new", "deploying"];
 function short(s: string) { return s ? s.slice(0, 7) : "—"; }
 
+// commitCell shows the deployed commit vs. the latest remote head:
+//  - up to date  → green sha ✓
+//  - behind      → amber "deployed → latest"
+//  - not deployed → "— → latest"
+//  - no GitHub / unknown latest → just the deployed sha
+function commitCell(app: WebApp) {
+  const cur = short(app.commit);
+  if (!app.latest_commit) return <span className="mono" title={app.commit}>{cur}</span>;
+  const latest = short(app.latest_commit);
+  if (app.up_to_date) {
+    return <span className="mono" style={{ color: "#3fb950" }} title={`up to date (${app.commit})`}>{cur} ✓</span>;
+  }
+  return (
+    <span className="mono" style={{ color: "#d08b1f" }} title={`deployed ${app.commit || "(none)"} → latest ${app.latest_commit}`}>
+      {cur} → {latest}
+    </span>
+  );
+}
+
 export function WebAppsPage({ role }: { role?: string }) {
   const qc = useQueryClient();
   const canDeploy = atLeast(role ?? "", "deployer");
@@ -36,7 +55,7 @@ export function WebAppsPage({ role }: { role?: string }) {
             <thead>
               <tr>
                 <th>Name</th><th>Runtime</th><th>Source</th><th>Port</th>
-                <th>Commit</th><th>Status</th>{canDeploy && <th />}
+                <th>Route</th><th>Deployed → latest</th><th>Status</th>{canDeploy && <th />}
               </tr>
             </thead>
             <tbody>
@@ -89,7 +108,12 @@ function WebAppRow({ app, canDeploy, canAdmin }: { app: WebApp; canDeploy: boole
         <span className="muted"> · {app.branch}</span>
       </td>
       <td className="mono">127.0.0.1:{app.internal_port}</td>
-      <td className="mono" title={app.commit}>{short(app.commit)}</td>
+      <td style={{ fontSize: 12 }}>
+        {app.route_domain
+          ? <a className="link mono" href="#/routes" title={`route #${app.route_id} (${app.route_status})`}>{app.route_domain}</a>
+          : <span className="muted">— not routed —</span>}
+      </td>
+      <td style={{ fontSize: 12 }}>{commitCell(app)}</td>
       <td><Badge status={app.status} /></td>
       {canDeploy && (
         <td className="row-actions" style={{ whiteSpace: "nowrap" }}>

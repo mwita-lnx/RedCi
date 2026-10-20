@@ -1,8 +1,19 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiGet, apiPost, atLeast, Route, RouteLocation, Server } from "../api";
+import { apiGet, apiPost, atLeast, Route, RouteLocation, Server, WebApp } from "../api";
 import { Badge, Button, Empty, Modal, PageHeader, PanelBox, TableSkeleton } from "../ui";
+
+// sslLabel renders the SSL cell: off / on, plus "expires in N days" (red when
+// under 14 days) when a cert notAfter is known.
+function sslLabel(rt: Route) {
+  if (!rt.ssl) return <span>off</span>;
+  if (!rt.ssl_expires_at) return <span>on</span>;
+  const days = Math.round((rt.ssl_expires_at * 1000 - Date.now()) / 86400000);
+  const color = days < 0 ? "#e5534b" : days < 14 ? "#d08b1f" : "var(--muted,#8a94a6)";
+  const text = days < 0 ? `expired ${-days}d ago` : `expires in ${days}d`;
+  return <span title={new Date(rt.ssl_expires_at * 1000).toISOString().slice(0, 10)} style={{ color }}>{text}</span>;
+}
 
 export function RoutesPage({ role }: { role?: string }) {
   const qc = useQueryClient();
@@ -32,19 +43,22 @@ export function RoutesPage({ role }: { role?: string }) {
                   <td style={{ fontWeight: 550 }}>
                     <a onClick={(e) => { e.stopPropagation(); setDetailId(rt.id); }} style={{ cursor: "pointer" }}>{rt.domain}</a>
                   </td>
-                  <td>{rt.kind === "frontend-split"
-                    ? <span className="badge" style={{ background: "var(--info-bg,#1f2a44)" }}>frontend-split</span>
-                    : <span className="muted">proxy</span>}</td>
+                  <td>{rt.kind === "unmanaged"
+                    ? <span className="badge muted" title="Discovered from an existing nginx config; read-only">unmanaged</span>
+                    : rt.kind === "frontend-split"
+                      ? <span className="badge" style={{ background: "var(--info-bg,#1f2a44)" }}>frontend-split</span>
+                      : <span className="muted">proxy{rt.web_app_id ? " · app" : ""}</span>}</td>
                   <td className="mono">
                     {rt.kind === "frontend-split"
                       ? `${rt.locations?.length ?? 0} location${rt.locations?.length === 1 ? "" : "s"}${rt.frappe_site ? ` · frappe:${rt.frappe_site}` : ""}`
+                      : rt.kind === "unmanaged" ? <span className="muted">{rt.nginx_path}</span>
                       : rt.upstream}
                   </td>
-                  <td className="muted">{rt.ssl ? "on" : "off"}</td>
+                  <td className="muted">{sslLabel(rt)}</td>
                   <td><Badge status={rt.status} /></td>
                   <td className="row-actions" onClick={(e) => e.stopPropagation()}>
                     <Button variant="ghost" size="sm" onClick={() => setDetailId(rt.id)}>View</Button>
-                    {canAdmin && <Button variant="secondary" size="sm" loading={apply.isPending && apply.variables === rt.id} onClick={() => apply.mutate(rt.id)}>Apply</Button>}
+                    {canAdmin && rt.managed !== false && <Button variant="secondary" size="sm" loading={apply.isPending && apply.variables === rt.id} onClick={() => apply.mutate(rt.id)}>Apply</Button>}
                   </td>
                 </tr>
               ))}
@@ -143,6 +157,8 @@ function presetFrontendSplit(frappeUpstream: string, nextUpstream: string, socke
 
 function NewRouteModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const { data: servers } = useQuery({ queryKey: ["servers"], queryFn: () => apiGet<Server[]>("/servers") });
+  const { data: webApps } = useQuery({ queryKey: ["webapps"], queryFn: () => apiGet<WebApp[]>("/webapps") });
+  const [webAppId, setWebAppId] = useState<number>(0);
   const [serverId, setServerId] = useState<number>(0);
   const [domain, setDomain] = useState("");
   const [ssl, setSsl] = useState(true);
@@ -153,11 +169,24 @@ function NewRouteModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
   const [aliases, setAliases] = useState("");
   const [locations, setLocations] = useState<RouteLocation[]>([{ ...BLANK_LOC }]);
 
+  // Linking to a registered web app locks the server to the app's and prefills
+  // the upstream from its internal_port (still editable).
+  const linkedApp = (webApps ?? []).find((a) => a.id === webAppId);
+  const pickWebApp = (id: number) => {
+    setWebAppId(id);
+    const app = (webApps ?? []).find((a) => a.id === id);
+    if (app) {
+      setServerId(app.server_id);
+      setUpstream(`http://127.0.0.1:${app.internal_port}`);
+    }
+  };
+
   const create = useMutation({
     mutationFn: () => {
       const body: Record<string, unknown> = {
         server_id: serverId, domain: domain.trim(), ssl,
       };
+      if (webAppId > 0) body.web_app_id = webAppId;
       if (mode === "proxy") {
         body.upstream = upstream.trim();
       } else {
@@ -179,8 +208,21 @@ function NewRouteModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
     <Modal title="New route" description="A simple proxy, or a Frappe + frontend path-split vhost." onClose={onClose} wide>
       <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
         <div className="modal-body">
+          <label className="field">Link to web app (optional)
+            <select value={webAppId} onChange={(e) => pickWebApp(Number(e.target.value))}>
+              <option value={0}>— none (manual upstream) —</option>
+              {(webApps ?? []).map((a) => (
+                <option key={a.id} value={a.id}>{a.name} · {a.server_name} · :{a.internal_port}{a.route_id ? " (already routed)" : ""}</option>
+              ))}
+            </select>
+          </label>
+          {linkedApp && (
+            <div className="muted" style={{ fontSize: 12, marginTop: -4 }}>
+              Upstream auto-set to <span className="mono">http://127.0.0.1:{linkedApp.internal_port}</span>; server locked to <b>{linkedApp.server_name}</b>.
+            </div>
+          )}
           <label className="field">Server
-            <select value={serverId} onChange={(e) => setServerId(Number(e.target.value))} required>
+            <select value={serverId} onChange={(e) => setServerId(Number(e.target.value))} required disabled={webAppId > 0}>
               <option value={0} disabled>Select a server…</option>
               {(servers ?? []).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.status})</option>)}
             </select>

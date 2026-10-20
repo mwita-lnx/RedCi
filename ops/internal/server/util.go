@@ -3,13 +3,14 @@ package server
 import (
 	"database/sql"
 	"strings"
-
-	"github.com/mwita-lnx/RedCi/ops/internal/store"
 )
 
-// listAuditDefault returns params for the most recent 100 audit rows.
-func listAuditDefault() store.ListAuditParams {
-	return store.ListAuditParams{Limit: 100, Offset: 0}
+// orDefault returns s, or def when s is empty.
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 func nullStr(s string) sql.NullString {

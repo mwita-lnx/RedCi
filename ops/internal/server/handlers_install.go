@@ -145,13 +145,18 @@ curl -fsSL "$PANEL/agent/download/$ARCH" -o /usr/local/bin/ops-agent
 chmod 0755 /usr/local/bin/ops-agent
 
 echo "==> preparing directories"
-install -d -m 0755 /etc/ops-agent
+# The agent runs as $AGENT_USER and writes its local journal (agent.db) next to
+# the credential in /etc/ops-agent, so that dir must be owned by the agent user
+# (the credential file itself is locked down to 0600 below). /var/lib/ops-agent
+# is the agent's state dir.
+install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0755 /etc/ops-agent
 install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 /var/lib/ops-agent
 
 echo "==> registering with the panel"
 OPS_AGENT_CREDENTIAL=/etc/ops-agent/credential \
   /usr/local/bin/ops-agent register --panel "$PANEL" --token "$TOKEN"
 chown "$AGENT_USER":"$AGENT_USER" /etc/ops-agent/credential 2>/dev/null || true
+chmod 0600 /etc/ops-agent/credential 2>/dev/null || true
 
 echo "==> installing systemd service"
 cat > /etc/systemd/system/ops-agent.service <<UNIT

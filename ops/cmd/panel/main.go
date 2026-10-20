@@ -28,7 +28,7 @@ func main() {
 		Use:   "panel",
 		Short: "RedCi Ops Panel",
 	}
-	root.AddCommand(serveCmd(), migrateCmd(), userCmd(), serverCmd())
+	root.AddCommand(serveCmd(), migrateCmd(), userCmd(), serverCmd(), webAppCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

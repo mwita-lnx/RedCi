@@ -557,6 +557,14 @@ func nullStrVal(ns sql.NullString) string {
 	return ""
 }
 
+// nullInt64Val returns the int64 value or 0 when NULL (0 = "not linked").
+func nullInt64Val(ni sql.NullInt64) int64 {
+	if ni.Valid {
+		return ni.Int64
+	}
+	return 0
+}
+
 func (s *Server) apiBenches(w http.ResponseWriter, r *http.Request) {
 	benches, _ := s.db.ReadQ.ListBenches(r.Context())
 	out := make([]any, 0, len(benches))
@@ -901,11 +909,29 @@ func (s *Server) apiAppSourceAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiWebApps(w http.ResponseWriter, r *http.Request) {
-	apps, _ := s.db.ReadQ.ListWebApps(r.Context())
-	servers, _ := s.db.ReadQ.ListServers(r.Context())
+	ctx := r.Context()
+	apps, _ := s.db.ReadQ.ListWebApps(ctx)
+	servers, _ := s.db.ReadQ.ListServers(ctx)
 	srvName := map[int64]string{}
 	for _, sv := range servers {
 		srvName[sv.ID] = sv.Name
+	}
+	// Latest remote commit per app, best-effort, only when GitHub is connected
+	// and the repo is a GitHub slug. Cached per (repo,branch) so N apps on the
+	// same repo cost one API call.
+	hasToken := s.ghToken(ctx) != ""
+	latestCache := map[string]string{}
+	latestFor := func(repo, branch string) string {
+		if !hasToken || !validRepo(repo) {
+			return ""
+		}
+		key := repo + "@" + branch
+		if v, ok := latestCache[key]; ok {
+			return v
+		}
+		v := s.ghLatestCommit(ctx, repo, branch)
+		latestCache[key] = v
+		return v
 	}
 	out := make([]any, 0, len(apps))
 	for _, a := range apps {
@@ -920,14 +946,26 @@ func (s *Server) apiWebApps(w http.ResponseWriter, r *http.Request) {
 		if source == "" {
 			source = a.Url
 		}
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"id": a.ID, "name": a.Name, "runtime": a.Runtime,
 			"server_id": a.ServerID, "server_name": srvName[a.ServerID],
 			"repo": a.Repo, "url": a.Url, "branch": a.Branch, "source": source,
 			"internal_port": a.InternalPort, "container_port": a.ContainerPort,
 			"health_path": a.HealthPath, "dockerfile_path": a.DockerfilePath, "auto_deploy": a.AutoDeploy != 0,
 			"status": a.Status, "commit": commit, "previous_commit": prev,
-		})
+		}
+		// Latest remote head + whether the deployed commit matches it.
+		if latest := latestFor(a.Repo, a.Branch); latest != "" {
+			entry["latest_commit"] = latest
+			entry["up_to_date"] = commit != "" && commit == latest
+		}
+		// Reverse link: the nginx route(s) fronting this app, if any.
+		if routes, err := s.db.ReadQ.RoutesForWebApp(ctx, sql.NullInt64{Int64: a.ID, Valid: true}); err == nil && len(routes) > 0 {
+			entry["route_id"] = routes[0].ID
+			entry["route_domain"] = routes[0].Domain
+			entry["route_status"] = routes[0].Status
+		}
+		out = append(out, entry)
 	}
 	writeJSONAPI(w, http.StatusOK, out)
 }
@@ -1034,11 +1072,18 @@ func routeJSON(rt store.ProxyRoute) map[string]any {
 	if len(locs) > 0 {
 		kind = "frontend-split"
 	}
+	if rt.Managed == 0 {
+		kind = "unmanaged" // discovered from an existing nginx vhost; read-only
+	}
 	return map[string]any{
 		"id": rt.ID, "domain": rt.Domain, "upstream": rt.Upstream,
 		"ssl": rt.SslEnabled != 0, "status": rt.Status,
 		"kind": kind, "locations": locs, "aliases": aliases,
-		"frappe_site": nullStrVal(rt.FrappeSite),
+		"managed":        rt.Managed != 0,
+		"nginx_path":     nullStrVal(rt.NginxPath),
+		"web_app_id":     nullInt64Val(rt.WebAppID),
+		"ssl_expires_at": nullInt64Val(rt.SslExpiresAt),
+		"frappe_site":    nullStrVal(rt.FrappeSite),
 		"static_root": nullStrVal(rt.StaticRoot),
 		"snippet":     nullStrVal(rt.ExtraSnippet),
 		"config_hash": nullStrVal(rt.ConfigHash),
@@ -1062,6 +1107,16 @@ func (s *Server) apiRouteDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := routeJSON(rt)
+	out["managed"] = rt.Managed != 0
+	if rt.Managed == 0 {
+		// Unmanaged route discovered from an existing nginx vhost: show the
+		// verbatim config as-is. RedCi never renders or overwrites it.
+		out["config"] = nullStrVal(rt.RawConfig)
+		out["nginx_path"] = nullStrVal(rt.NginxPath)
+		out["read_only"] = true
+		writeJSONAPI(w, http.StatusOK, out)
+		return
+	}
 	// Render the exact nginx config the agent would write for this route, so the
 	// UI can show the source of truth. HTTP2On defaults to true (nginx 1.25+);
 	// the agent re-renders with the host's detected version at apply time.
@@ -1083,6 +1138,7 @@ func (s *Server) apiRouteDetail(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiRouteCreate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ServerID   int64                `json:"server_id"`
+		WebAppID   int64                `json:"web_app_id"` // link to a registered web app (0 = none)
 		Domain     string               `json:"domain"`
 		Upstream   string               `json:"upstream"`
 		SSL        bool                 `json:"ssl"`
@@ -1105,7 +1161,15 @@ func (s *Server) apiRouteCreate(w http.ResponseWriter, r *http.Request) {
 		Aliases:    in.Aliases,
 		Locations:  in.Locations,
 	}
-	id, err := s.CreateRoute(r.Context(), in.ServerID, p)
+	// When a web app is named, link to it and derive the upstream from its
+	// internal_port (server comes from the app, so in.ServerID is ignored).
+	var id int64
+	var err error
+	if in.WebAppID > 0 {
+		id, err = s.CreateRouteForWebApp(r.Context(), in.WebAppID, p)
+	} else {
+		id, err = s.CreateRoute(r.Context(), in.ServerID, p)
+	}
 	if err != nil {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return

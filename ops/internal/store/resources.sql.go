@@ -127,6 +127,112 @@ func (q *Queries) CreateBench(ctx context.Context, arg CreateBenchParams) (Bench
 	return i, err
 }
 
+const createDiscoveredRoute = `-- name: CreateDiscoveredRoute :one
+INSERT INTO proxy_routes (server_id, domain, upstream, ssl_enabled, ssl_expires_at, status,
+                          managed, raw_config, nginx_path)
+VALUES (?, ?, ?, ?, ?, 'active', 0, ?, ?)
+RETURNING id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json, managed, raw_config, nginx_path
+`
+
+type CreateDiscoveredRouteParams struct {
+	ServerID     int64          `json:"server_id"`
+	Domain       string         `json:"domain"`
+	Upstream     string         `json:"upstream"`
+	SslEnabled   int64          `json:"ssl_enabled"`
+	SslExpiresAt sql.NullInt64  `json:"ssl_expires_at"`
+	RawConfig    sql.NullString `json:"raw_config"`
+	NginxPath    sql.NullString `json:"nginx_path"`
+}
+
+// Insert an unmanaged route discovered from an existing nginx vhost. upstream
+// carries the file path for reference (it is NOT NULL and unused for unmanaged
+// routes). ssl_enabled is best-effort inferred by the caller.
+func (q *Queries) CreateDiscoveredRoute(ctx context.Context, arg CreateDiscoveredRouteParams) (ProxyRoute, error) {
+	row := q.db.QueryRowContext(ctx, createDiscoveredRoute,
+		arg.ServerID,
+		arg.Domain,
+		arg.Upstream,
+		arg.SslEnabled,
+		arg.SslExpiresAt,
+		arg.RawConfig,
+		arg.NginxPath,
+	)
+	var i ProxyRoute
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Domain,
+		&i.Upstream,
+		&i.WebAppID,
+		&i.SslEnabled,
+		&i.SslExpiresAt,
+		&i.ExtraSnippet,
+		&i.ConfigHash,
+		&i.Status,
+		&i.LocationsJson,
+		&i.FrappeSite,
+		&i.StaticRoot,
+		&i.AliasesJson,
+		&i.Managed,
+		&i.RawConfig,
+		&i.NginxPath,
+	)
+	return i, err
+}
+
+const createDiscoveredWebApp = `-- name: CreateDiscoveredWebApp :one
+INSERT INTO web_apps (server_id, name, runtime, repo, branch, internal_port,
+                      current_commit, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, 'running')
+RETURNING id, server_id, app_source_id, name, runtime, repo, url, branch, auto_deploy, internal_port, container_port, health_path, env_enc, current_commit, previous_commit, status, dockerfile_path
+`
+
+type CreateDiscoveredWebAppParams struct {
+	ServerID      int64          `json:"server_id"`
+	Name          string         `json:"name"`
+	Runtime       string         `json:"runtime"`
+	Repo          string         `json:"repo"`
+	Branch        string         `json:"branch"`
+	InternalPort  int64          `json:"internal_port"`
+	CurrentCommit sql.NullString `json:"current_commit"`
+}
+
+// Insert a web app the agent discovered on disk (compose.yaml / ecosystem.config.js).
+// status is 'running' because the runtime file proves it is deployed; container_port
+// and health_path take their table defaults for the operator to adjust after import.
+func (q *Queries) CreateDiscoveredWebApp(ctx context.Context, arg CreateDiscoveredWebAppParams) (WebApp, error) {
+	row := q.db.QueryRowContext(ctx, createDiscoveredWebApp,
+		arg.ServerID,
+		arg.Name,
+		arg.Runtime,
+		arg.Repo,
+		arg.Branch,
+		arg.InternalPort,
+		arg.CurrentCommit,
+	)
+	var i WebApp
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.AppSourceID,
+		&i.Name,
+		&i.Runtime,
+		&i.Repo,
+		&i.Url,
+		&i.Branch,
+		&i.AutoDeploy,
+		&i.InternalPort,
+		&i.ContainerPort,
+		&i.HealthPath,
+		&i.EnvEnc,
+		&i.CurrentCommit,
+		&i.PreviousCommit,
+		&i.Status,
+		&i.DockerfilePath,
+	)
+	return i, err
+}
+
 const createFrappeApp = `-- name: CreateFrappeApp :one
 INSERT INTO frappe_apps (bench_id, app_source_id, app_name, current_commit)
 VALUES (?, ?, ?, ?)
@@ -166,7 +272,7 @@ const createProxyRoute = `-- name: CreateProxyRoute :one
 
 INSERT INTO proxy_routes (server_id, domain, upstream, web_app_id, ssl_enabled, extra_snippet, status)
 VALUES (?, ?, ?, ?, ?, ?, 'pending')
-RETURNING id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json
+RETURNING id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json, managed, raw_config, nginx_path
 `
 
 type CreateProxyRouteParams struct {
@@ -204,6 +310,9 @@ func (q *Queries) CreateProxyRoute(ctx context.Context, arg CreateProxyRoutePara
 		&i.FrappeSite,
 		&i.StaticRoot,
 		&i.AliasesJson,
+		&i.Managed,
+		&i.RawConfig,
+		&i.NginxPath,
 	)
 	return i, err
 }
@@ -213,7 +322,7 @@ INSERT INTO proxy_routes (server_id, domain, upstream, web_app_id, ssl_enabled,
                           extra_snippet, locations_json, frappe_site, static_root,
                           aliases_json, status)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-RETURNING id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json
+RETURNING id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json, managed, raw_config, nginx_path
 `
 
 type CreateProxyRouteModelBParams struct {
@@ -260,6 +369,9 @@ func (q *Queries) CreateProxyRouteModelB(ctx context.Context, arg CreateProxyRou
 		&i.FrappeSite,
 		&i.StaticRoot,
 		&i.AliasesJson,
+		&i.Managed,
+		&i.RawConfig,
+		&i.NginxPath,
 	)
 	return i, err
 }
@@ -499,7 +611,7 @@ func (q *Queries) GetDeployPoint(ctx context.Context, arg GetDeployPointParams) 
 }
 
 const getProxyRoute = `-- name: GetProxyRoute :one
-SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json FROM proxy_routes WHERE id = ? LIMIT 1
+SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json, managed, raw_config, nginx_path FROM proxy_routes WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) GetProxyRoute(ctx context.Context, id int64) (ProxyRoute, error) {
@@ -520,6 +632,43 @@ func (q *Queries) GetProxyRoute(ctx context.Context, id int64) (ProxyRoute, erro
 		&i.FrappeSite,
 		&i.StaticRoot,
 		&i.AliasesJson,
+		&i.Managed,
+		&i.RawConfig,
+		&i.NginxPath,
+	)
+	return i, err
+}
+
+const getRouteByServerPath = `-- name: GetRouteByServerPath :one
+SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json, managed, raw_config, nginx_path FROM proxy_routes WHERE server_id = ? AND nginx_path = ? LIMIT 1
+`
+
+type GetRouteByServerPathParams struct {
+	ServerID  int64          `json:"server_id"`
+	NginxPath sql.NullString `json:"nginx_path"`
+}
+
+func (q *Queries) GetRouteByServerPath(ctx context.Context, arg GetRouteByServerPathParams) (ProxyRoute, error) {
+	row := q.db.QueryRowContext(ctx, getRouteByServerPath, arg.ServerID, arg.NginxPath)
+	var i ProxyRoute
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Domain,
+		&i.Upstream,
+		&i.WebAppID,
+		&i.SslEnabled,
+		&i.SslExpiresAt,
+		&i.ExtraSnippet,
+		&i.ConfigHash,
+		&i.Status,
+		&i.LocationsJson,
+		&i.FrappeSite,
+		&i.StaticRoot,
+		&i.AliasesJson,
+		&i.Managed,
+		&i.RawConfig,
+		&i.NginxPath,
 	)
 	return i, err
 }
@@ -766,7 +915,7 @@ func (q *Queries) ListFrappeAppsForBench(ctx context.Context, benchID int64) ([]
 }
 
 const listProxyRoutes = `-- name: ListProxyRoutes :many
-SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json FROM proxy_routes ORDER BY domain
+SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json, managed, raw_config, nginx_path FROM proxy_routes ORDER BY domain
 `
 
 func (q *Queries) ListProxyRoutes(ctx context.Context) ([]ProxyRoute, error) {
@@ -793,6 +942,9 @@ func (q *Queries) ListProxyRoutes(ctx context.Context) ([]ProxyRoute, error) {
 			&i.FrappeSite,
 			&i.StaticRoot,
 			&i.AliasesJson,
+			&i.Managed,
+			&i.RawConfig,
+			&i.NginxPath,
 		); err != nil {
 			return nil, err
 		}
@@ -808,7 +960,7 @@ func (q *Queries) ListProxyRoutes(ctx context.Context) ([]ProxyRoute, error) {
 }
 
 const listProxyRoutesForServer = `-- name: ListProxyRoutesForServer :many
-SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json FROM proxy_routes WHERE server_id = ? ORDER BY domain
+SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json, managed, raw_config, nginx_path FROM proxy_routes WHERE server_id = ? ORDER BY domain
 `
 
 func (q *Queries) ListProxyRoutesForServer(ctx context.Context, serverID int64) ([]ProxyRoute, error) {
@@ -835,6 +987,9 @@ func (q *Queries) ListProxyRoutesForServer(ctx context.Context, serverID int64) 
 			&i.FrappeSite,
 			&i.StaticRoot,
 			&i.AliasesJson,
+			&i.Managed,
+			&i.RawConfig,
+			&i.NginxPath,
 		); err != nil {
 			return nil, err
 		}
@@ -948,6 +1103,54 @@ func (q *Queries) RouteOrSiteExistsForDomain(ctx context.Context, arg RouteOrSit
 	var conflicts int64
 	err := row.Scan(&conflicts)
 	return conflicts, err
+}
+
+const routesForWebApp = `-- name: RoutesForWebApp :many
+SELECT id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json, managed, raw_config, nginx_path FROM proxy_routes
+WHERE web_app_id = ? AND status != 'deleted'
+ORDER BY domain
+`
+
+// Routes linked to a web app (excludes deleted), newest-domain first.
+func (q *Queries) RoutesForWebApp(ctx context.Context, webAppID sql.NullInt64) ([]ProxyRoute, error) {
+	rows, err := q.db.QueryContext(ctx, routesForWebApp, webAppID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProxyRoute{}
+	for rows.Next() {
+		var i ProxyRoute
+		if err := rows.Scan(
+			&i.ID,
+			&i.ServerID,
+			&i.Domain,
+			&i.Upstream,
+			&i.WebAppID,
+			&i.SslEnabled,
+			&i.SslExpiresAt,
+			&i.ExtraSnippet,
+			&i.ConfigHash,
+			&i.Status,
+			&i.LocationsJson,
+			&i.FrappeSite,
+			&i.StaticRoot,
+			&i.AliasesJson,
+			&i.Managed,
+			&i.RawConfig,
+			&i.NginxPath,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setAppSourceAutoDeploy = `-- name: SetAppSourceAutoDeploy :exec
@@ -1163,6 +1366,33 @@ func (q *Queries) SitesForBench(ctx context.Context, benchID int64) ([]Site, err
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateDiscoveredRoute = `-- name: UpdateDiscoveredRoute :exec
+UPDATE proxy_routes
+SET domain = ?, raw_config = ?, ssl_enabled = ?, ssl_expires_at = ?
+WHERE id = ? AND managed = 0
+`
+
+type UpdateDiscoveredRouteParams struct {
+	Domain       string         `json:"domain"`
+	RawConfig    sql.NullString `json:"raw_config"`
+	SslEnabled   int64          `json:"ssl_enabled"`
+	SslExpiresAt sql.NullInt64  `json:"ssl_expires_at"`
+	ID           int64          `json:"id"`
+}
+
+// Refresh an unmanaged route's verbatim config + domain when the on-disk file
+// changes. Only ever touches unmanaged (managed=0) rows.
+func (q *Queries) UpdateDiscoveredRoute(ctx context.Context, arg UpdateDiscoveredRouteParams) error {
+	_, err := q.db.ExecContext(ctx, updateDiscoveredRoute,
+		arg.Domain,
+		arg.RawConfig,
+		arg.SslEnabled,
+		arg.SslExpiresAt,
+		arg.ID,
+	)
+	return err
 }
 
 const updateSiteApps = `-- name: UpdateSiteApps :exec

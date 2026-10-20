@@ -165,6 +165,10 @@ export interface WebApp {
   repo: string; url: string; branch: string; source: string;
   internal_port: number; container_port: number; health_path: string;
   auto_deploy: boolean; status: string; commit: string; previous_commit: string;
+  // reverse link to the nginx route fronting this app, if one exists
+  route_id?: number; route_domain?: string; route_status?: string;
+  // latest remote head (when GitHub connected) + whether deployed == latest
+  latest_commit?: string; up_to_date?: boolean;
 }
 export interface RouteLocation {
   path: string;
@@ -176,7 +180,7 @@ export interface RouteLocation {
 }
 export interface Route {
   id: number; domain: string; upstream: string; ssl: boolean; status: string;
-  kind?: "proxy" | "frontend-split";
+  kind?: "proxy" | "frontend-split" | "unmanaged";
   locations?: RouteLocation[];
   aliases?: string[];
   frappe_site?: string;
@@ -185,6 +189,11 @@ export interface Route {
   config_hash?: string;
   config?: string;
   server_id?: number;
+  web_app_id?: number;   // linked registered web app (0/undefined = none)
+  managed?: boolean;     // false = discovered/unmanaged (read-only)
+  nginx_path?: string;
+  read_only?: boolean;
+  ssl_expires_at?: number; // cert notAfter (unix secs); 0 = unknown
 }
 export interface User { id: number; email: string; role: string; disabled: boolean }
 export interface Audit {

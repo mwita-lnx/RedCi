@@ -261,6 +261,8 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 func (a *Agent) discoveryLoop(ctx context.Context) {
 	push := func() {
 		res := ops.DiscoverBenches(a.cfg.BenchRoots)
+		res.WebApps = ops.DiscoverWebApps([]string{a.cfg.WebsitesRoot})
+		res.NginxVhosts = ops.DiscoverNginxVhosts()
 		raw, err := json.Marshal(res)
 		if err != nil {
 			return

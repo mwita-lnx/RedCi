@@ -143,6 +143,9 @@ type ProxyRoute struct {
 	FrappeSite    sql.NullString `json:"frappe_site"`
 	StaticRoot    sql.NullString `json:"static_root"`
 	AliasesJson   sql.NullString `json:"aliases_json"`
+	Managed       int64          `json:"managed"`
+	RawConfig     sql.NullString `json:"raw_config"`
+	NginxPath     sql.NullString `json:"nginx_path"`
 }
 
 type Secret struct {

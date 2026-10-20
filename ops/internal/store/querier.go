@@ -33,6 +33,14 @@ type Querier interface {
 	CreateBench(ctx context.Context, arg CreateBenchParams) (Bench, error)
 	// Deploys --------------------------------------------------------------------
 	CreateDeploy(ctx context.Context, arg CreateDeployParams) (Deploy, error)
+	// Insert an unmanaged route discovered from an existing nginx vhost. upstream
+	// carries the file path for reference (it is NOT NULL and unused for unmanaged
+	// routes). ssl_enabled is best-effort inferred by the caller.
+	CreateDiscoveredRoute(ctx context.Context, arg CreateDiscoveredRouteParams) (ProxyRoute, error)
+	// Insert a web app the agent discovered on disk (compose.yaml / ecosystem.config.js).
+	// status is 'running' because the runtime file proves it is deployed; container_port
+	// and health_path take their table defaults for the operator to adjust after import.
+	CreateDiscoveredWebApp(ctx context.Context, arg CreateDiscoveredWebAppParams) (WebApp, error)
 	CreateFrappeApp(ctx context.Context, arg CreateFrappeAppParams) (FrappeApp, error)
 	CreateJob(ctx context.Context, arg CreateJobParams) (Job, error)
 	// Pipelines (dev -> staging -> prod release trains) -------------------------
@@ -74,6 +82,7 @@ type Querier interface {
 	GetPipelineEnvByDeploy(ctx context.Context, lastDeployID sql.NullInt64) (PipelineEnv, error)
 	GetPipelineEnvByRank(ctx context.Context, arg GetPipelineEnvByRankParams) (PipelineEnv, error)
 	GetProxyRoute(ctx context.Context, id int64) (ProxyRoute, error)
+	GetRouteByServerPath(ctx context.Context, arg GetRouteByServerPathParams) (ProxyRoute, error)
 	GetSecret(ctx context.Context, name string) ([]byte, error)
 	GetServerByID(ctx context.Context, id int64) (Server, error)
 	GetServerDiscovery(ctx context.Context, id int64) (sql.NullString, error)
@@ -122,6 +131,8 @@ type Querier interface {
 	RecordWebhookDelivery(ctx context.Context, arg RecordWebhookDeliveryParams) error
 	RenewLease(ctx context.Context, id int64) error
 	RouteOrSiteExistsForDomain(ctx context.Context, arg RouteOrSiteExistsForDomainParams) (int64, error)
+	// Routes linked to a web app (excludes deleted), newest-domain first.
+	RoutesForWebApp(ctx context.Context, webAppID sql.NullInt64) ([]ProxyRoute, error)
 	SetAppSourceAutoDeploy(ctx context.Context, arg SetAppSourceAutoDeployParams) error
 	SetBenchFacts(ctx context.Context, arg SetBenchFactsParams) error
 	SetDeployRunning(ctx context.Context, id int64) error
@@ -146,6 +157,9 @@ type Querier interface {
 	SitesForBench(ctx context.Context, benchID int64) ([]Site, error)
 	StartJob(ctx context.Context, id int64) error
 	TouchUserLogin(ctx context.Context, id int64) error
+	// Refresh an unmanaged route's verbatim config + domain when the on-disk file
+	// changes. Only ever touches unmanaged (managed=0) rows.
+	UpdateDiscoveredRoute(ctx context.Context, arg UpdateDiscoveredRouteParams) error
 	UpdateSiteApps(ctx context.Context, arg UpdateSiteAppsParams) error
 	UpsertDeployPoint(ctx context.Context, arg UpsertDeployPointParams) error
 	WebAppsForSource(ctx context.Context, appSourceID sql.NullInt64) ([]WebApp, error)
