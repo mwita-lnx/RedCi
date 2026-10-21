@@ -51,6 +51,10 @@ type Querier interface {
 	// Create a Model B (path-split) route carrying its locations/frappe_site/static/
 	// aliases spec.
 	CreateProxyRouteModelB(ctx context.Context, arg CreateProxyRouteModelBParams) (ProxyRoute, error)
+	// Create a managed route whose body is an operator-supplied verbatim vhost
+	// (raw mode). managed=1 distinguishes it from a discovered/unmanaged route;
+	// the agent writes raw_config as-is instead of rendering a template.
+	CreateProxyRouteRaw(ctx context.Context, arg CreateProxyRouteRawParams) (ProxyRoute, error)
 	// Server enrollment and heartbeat -------------------------------------------
 	CreateServer(ctx context.Context, arg CreateServerParams) (Server, error)
 	CreateSite(ctx context.Context, arg CreateSiteParams) (Site, error)

@@ -1,6 +1,9 @@
 package jobs
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // GetFrappeAppParams drives `get_frappe_app` (first install of a custom app on
 // a bench). The clone token rides in git's environment, never in Args.
@@ -168,6 +171,7 @@ type WriteProxyRouteParams struct {
 	FrappeSite    string          `json:"frappe_site,omitempty"`    // X-Frappe-Site-Name for frappe_proxy locations
 	StaticRoot    string          `json:"static_root,omitempty"`    // default root for filesystem locations
 	Locations     []RouteLocation `json:"locations,omitempty"`      // Model B path rules; empty = simple mode
+	RawConfig     string          `json:"raw_config,omitempty"`     // raw mode: full verbatim vhost; when set, written as-is (no template)
 }
 
 func (p WriteProxyRouteParams) Validate([]string) error {
@@ -178,6 +182,15 @@ func (p WriteProxyRouteParams) Validate([]string) error {
 		if err := ValidateDomain(a); err != nil {
 			return fmt.Errorf("alias %q: %w", a, err)
 		}
+	}
+	// Raw mode: the operator supplies the whole vhost; nothing to template, and
+	// the agent validates it with `nginx -t` before reload. Only sanity-check it
+	// is non-trivial and mentions a server block.
+	if p.RawConfig != "" {
+		if !strings.Contains(p.RawConfig, "server") {
+			return fmt.Errorf("raw config must contain an nginx server block")
+		}
+		return nil
 	}
 	if len(p.Locations) == 0 {
 		// Simple mode: one upstream required.

@@ -1083,6 +1083,9 @@ func routeJSON(rt store.ProxyRoute) map[string]any {
 	if len(locs) > 0 {
 		kind = "frontend-split"
 	}
+	if rt.Managed != 0 && rt.RawConfig.Valid && rt.RawConfig.String != "" {
+		kind = "raw" // operator-authored verbatim vhost (managed)
+	}
 	if rt.Managed == 0 {
 		kind = "unmanaged" // discovered from an existing nginx vhost; read-only
 	}
@@ -1128,6 +1131,13 @@ func (s *Server) apiRouteDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSONAPI(w, http.StatusOK, out)
 		return
 	}
+	if rt.RawConfig.Valid && rt.RawConfig.String != "" {
+		// Raw (managed) route: the body is the operator's verbatim vhost. Show it
+		// as the config; RedCi writes it as-is on apply (it is NOT read-only).
+		out["config"] = rt.RawConfig.String
+		writeJSONAPI(w, http.StatusOK, out)
+		return
+	}
 	// Render the exact nginx config the agent would write for this route, so the
 	// UI can show the source of truth. HTTP2On defaults to true (nginx 1.25+);
 	// the agent re-renders with the host's detected version at apply time.
@@ -1158,6 +1168,7 @@ func (s *Server) apiRouteCreate(w http.ResponseWriter, r *http.Request) {
 		StaticRoot string               `json:"static_root"`
 		Aliases    []string             `json:"aliases"`
 		Locations  []jobs.RouteLocation `json:"locations"`
+		RawConfig  string               `json:"raw_config"` // raw mode: full verbatim vhost
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -1171,6 +1182,7 @@ func (s *Server) apiRouteCreate(w http.ResponseWriter, r *http.Request) {
 		StaticRoot: strings.TrimSpace(in.StaticRoot),
 		Aliases:    in.Aliases,
 		Locations:  in.Locations,
+		RawConfig:  in.RawConfig,
 	}
 	// When a web app is named, link to it and derive the upstream from its
 	// internal_port (server comes from the app, so in.ServerID is ignored).

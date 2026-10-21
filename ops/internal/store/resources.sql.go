@@ -376,6 +376,55 @@ func (q *Queries) CreateProxyRouteModelB(ctx context.Context, arg CreateProxyRou
 	return i, err
 }
 
+const createProxyRouteRaw = `-- name: CreateProxyRouteRaw :one
+INSERT INTO proxy_routes (server_id, domain, upstream, web_app_id, ssl_enabled,
+                          raw_config, managed, status)
+VALUES (?, ?, '', ?, ?, ?, 1, 'pending')
+RETURNING id, server_id, domain, upstream, web_app_id, ssl_enabled, ssl_expires_at, extra_snippet, config_hash, status, locations_json, frappe_site, static_root, aliases_json, managed, raw_config, nginx_path
+`
+
+type CreateProxyRouteRawParams struct {
+	ServerID   int64          `json:"server_id"`
+	Domain     string         `json:"domain"`
+	WebAppID   sql.NullInt64  `json:"web_app_id"`
+	SslEnabled int64          `json:"ssl_enabled"`
+	RawConfig  sql.NullString `json:"raw_config"`
+}
+
+// Create a managed route whose body is an operator-supplied verbatim vhost
+// (raw mode). managed=1 distinguishes it from a discovered/unmanaged route;
+// the agent writes raw_config as-is instead of rendering a template.
+func (q *Queries) CreateProxyRouteRaw(ctx context.Context, arg CreateProxyRouteRawParams) (ProxyRoute, error) {
+	row := q.db.QueryRowContext(ctx, createProxyRouteRaw,
+		arg.ServerID,
+		arg.Domain,
+		arg.WebAppID,
+		arg.SslEnabled,
+		arg.RawConfig,
+	)
+	var i ProxyRoute
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Domain,
+		&i.Upstream,
+		&i.WebAppID,
+		&i.SslEnabled,
+		&i.SslExpiresAt,
+		&i.ExtraSnippet,
+		&i.ConfigHash,
+		&i.Status,
+		&i.LocationsJson,
+		&i.FrappeSite,
+		&i.StaticRoot,
+		&i.AliasesJson,
+		&i.Managed,
+		&i.RawConfig,
+		&i.NginxPath,
+	)
+	return i, err
+}
+
 const createSite = `-- name: CreateSite :one
 INSERT INTO sites (bench_id, domain, status, apps_json, ssl_enabled)
 VALUES (?, ?, ?, ?, ?)

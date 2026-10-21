@@ -162,12 +162,13 @@ function NewRouteModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
   const [serverId, setServerId] = useState<number>(0);
   const [domain, setDomain] = useState("");
   const [ssl, setSsl] = useState(true);
-  const [mode, setMode] = useState<"proxy" | "frontend-split">("proxy");
+  const [mode, setMode] = useState<"proxy" | "frontend-split" | "raw">("proxy");
   const [upstream, setUpstream] = useState("http://127.0.0.1:3000");
   const [frappeSite, setFrappeSite] = useState("");
   const [staticRoot, setStaticRoot] = useState("");
   const [aliases, setAliases] = useState("");
   const [locations, setLocations] = useState<RouteLocation[]>([{ ...BLANK_LOC }]);
+  const [rawConfig, setRawConfig] = useState("");
 
   // Linking to a registered web app locks the server to the app's and prefills
   // the upstream from its internal_port (still editable).
@@ -189,6 +190,8 @@ function NewRouteModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
       if (webAppId > 0) body.web_app_id = webAppId;
       if (mode === "proxy") {
         body.upstream = upstream.trim();
+      } else if (mode === "raw") {
+        body.raw_config = rawConfig;
       } else {
         body.frappe_site = frappeSite.trim();
         body.static_root = staticRoot.trim();
@@ -235,10 +238,22 @@ function NewRouteModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
           <div className="rtabs" style={{ marginTop: 8 }}>
             <button type="button" className={mode === "proxy" ? "on" : ""} onClick={() => setMode("proxy")}>Simple proxy</button>
             <button type="button" className={mode === "frontend-split" ? "on" : ""} onClick={() => setMode("frontend-split")}>Frappe + frontend split</button>
+            <button type="button" className={mode === "raw" ? "on" : ""} onClick={() => setMode("raw")}>Raw config</button>
           </div>
 
           {mode === "proxy" ? (
             <label className="field">Upstream<input className="mono" value={upstream} onChange={(e) => setUpstream(e.target.value)} placeholder="http://127.0.0.1:3000" required /></label>
+          ) : mode === "raw" ? (
+            <>
+              <label className="field">Full nginx vhost (written verbatim; validated with <span className="mono">nginx -t</span> before reload)
+                <textarea className="mono" value={rawConfig} onChange={(e) => setRawConfig(e.target.value)} rows={16} spellCheck={false}
+                  placeholder={"server {\n    listen 80;\n    server_name app.example.com;\n    location / {\n        proxy_pass http://127.0.0.1:3000;\n    }\n}"} required />
+              </label>
+              <div className="muted" style={{ fontSize: 12 }}>
+                You own the whole config. If you ticked "Issue SSL", certbot runs for the domain first — reference its cert at
+                <span className="mono"> /etc/letsencrypt/live/&lt;domain&gt;/fullchain.pem</span>. A bad config fails <span className="mono">nginx -t</span> and is auto-rolled-back.
+              </div>
+            </>
           ) : (
             <>
               <div style={{ display: "flex", gap: 10 }}>

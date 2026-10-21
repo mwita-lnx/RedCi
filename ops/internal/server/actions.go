@@ -498,6 +498,18 @@ func (s *Server) createRouteLinked(ctx context.Context, serverID int64, p jobs.W
 	if webAppID > 0 {
 		link = sql.NullInt64{Int64: webAppID, Valid: true}
 	}
+	// Raw mode: store the verbatim vhost; the agent writes it as-is. managed=1
+	// (an authored raw route, unlike a discovered/unmanaged one).
+	if p.RawConfig != "" {
+		rt, err := s.db.WriteQ.CreateProxyRouteRaw(ctx, store.CreateProxyRouteRawParams{
+			ServerID: serverID, Domain: p.Domain, WebAppID: link,
+			SslEnabled: boolToInt(p.SSL), RawConfig: nullStr(p.RawConfig),
+		})
+		if err != nil {
+			return 0, err
+		}
+		return rt.ID, nil
+	}
 	// The simple-mode upstream column still stores p.Upstream (may be empty in
 	// Model B); the catch-all in Model B lives in Locations instead.
 	if len(p.Locations) == 0 {
@@ -575,6 +587,10 @@ func writeRouteParams(route store.ProxyRoute, snippet string, ssl bool) jobs.Wri
 	}
 	if route.LocationsJson.Valid && route.LocationsJson.String != "" {
 		_ = json.Unmarshal([]byte(route.LocationsJson.String), &p.Locations)
+	}
+	// Raw mode: carry the verbatim vhost so the agent writes it as-is.
+	if route.RawConfig.Valid && route.RawConfig.String != "" {
+		p.RawConfig = route.RawConfig.String
 	}
 	return p
 }

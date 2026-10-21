@@ -15,20 +15,29 @@ func runWriteRoute(ctx context.Context, env Env, job protocol.Job, log Log) Resu
 	if err := json.Unmarshal(job.Params, &p); err != nil {
 		return fail(err)
 	}
-	content, err := jobs.RenderRoute(jobs.RouteData{
-		ID:         p.RouteID,
-		Domain:     p.Domain,
-		Aliases:    p.Aliases,
-		Upstream:   p.Upstream,
-		SSL:        p.SSL,
-		Snippet:    p.Snippet,
-		HTTP2On:    nginxHasHTTP2On(env.NginxVer),
-		FrappeSite: p.FrappeSite,
-		StaticRoot: p.StaticRoot,
-		Locations:  p.Locations,
-	})
-	if err != nil {
-		return fail(err)
+	// Raw mode: write the operator-supplied vhost verbatim (no template). Apply
+	// still runs `nginx -t` and auto-rolls-back on failure, so a bad paste can't
+	// take nginx down.
+	var content string
+	if p.RawConfig != "" {
+		content = p.RawConfig
+	} else {
+		rendered, err := jobs.RenderRoute(jobs.RouteData{
+			ID:         p.RouteID,
+			Domain:     p.Domain,
+			Aliases:    p.Aliases,
+			Upstream:   p.Upstream,
+			SSL:        p.SSL,
+			Snippet:    p.Snippet,
+			HTTP2On:    nginxHasHTTP2On(env.NginxVer),
+			FrappeSite: p.FrappeSite,
+			StaticRoot: p.StaticRoot,
+			Locations:  p.Locations,
+		})
+		if err != nil {
+			return fail(err)
+		}
+		content = rendered
 	}
 	hash, err := env.Nginx.Apply(ctx, content, p.Domain, log)
 	if err != nil {

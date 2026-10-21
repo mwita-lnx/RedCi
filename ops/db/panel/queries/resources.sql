@@ -153,6 +153,15 @@ INSERT INTO proxy_routes (server_id, domain, upstream, web_app_id, ssl_enabled, 
 VALUES (?, ?, ?, ?, ?, ?, 'pending')
 RETURNING *;
 
+-- name: CreateProxyRouteRaw :one
+-- Create a managed route whose body is an operator-supplied verbatim vhost
+-- (raw mode). managed=1 distinguishes it from a discovered/unmanaged route;
+-- the agent writes raw_config as-is instead of rendering a template.
+INSERT INTO proxy_routes (server_id, domain, upstream, web_app_id, ssl_enabled,
+                          raw_config, managed, status)
+VALUES (?, ?, '', ?, ?, ?, 1, 'pending')
+RETURNING *;
+
 -- name: CreateProxyRouteModelB :one
 -- Create a Model B (path-split) route carrying its locations/frappe_site/static/
 -- aliases spec.
