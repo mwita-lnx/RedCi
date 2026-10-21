@@ -110,5 +110,40 @@ func webAppCmd() *cobra.Command {
 	setCommit.Flags().Int64Var(&appID, "id", 0, "web app id")
 	setCommit.Flags().StringVar(&commit, "commit", "", "commit SHA the app is running")
 	cmd.AddCommand(setCommit)
+
+	// deploy: enqueue a real deploy for a web app (clone/fetch, build, (re)start,
+	// health-check) — the CLI equivalent of the UI "Deploy latest" button.
+	var depID int64
+	var depCommit, depStart, depBuild string
+	deploy := &cobra.Command{
+		Use:   "deploy",
+		Short: "Deploy a web app (empty --commit resolves the latest on its branch)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg := ops.LoadConfig()
+			db, authSvc, sealer, err := setup(cfg)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			if err := db.Migrate(cmd.Context()); err != nil {
+				return err
+			}
+			if depID == 0 {
+				return fmt.Errorf("--id is required")
+			}
+			srv := server.New(cfg, db, authSvc, sealer, events.New(), newLogger())
+			id, err := srv.DeployWebApp(cmd.Context(), depID, depCommit, depStart, depBuild, 0)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("deploy #%d queued for web app %d\n", id, depID)
+			return nil
+		},
+	}
+	deploy.Flags().Int64Var(&depID, "id", 0, "web app id")
+	deploy.Flags().StringVar(&depCommit, "commit", "", "commit SHA (empty = latest on branch)")
+	deploy.Flags().StringVar(&depStart, "start-command", "", "pm2 start command override")
+	deploy.Flags().StringVar(&depBuild, "build-command", "", "pm2 build command override")
+	cmd.AddCommand(deploy)
 	return cmd
 }

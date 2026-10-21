@@ -69,6 +69,14 @@ export interface AppInfo {
 
 export interface Bench { id: number; name: string; path: string; server_id: number }
 
+// Per-resource RBAC grant: raises a user's role on a site or bench.
+export interface Grant {
+  id: number;
+  resource_type: "site" | "bench";
+  resource_id: number;
+  role: string;
+}
+
 export interface Deploy {
   id: number; kind: string; target_type: string; target_id: number;
   trigger: string; status: string; error: string; created_at: number; last_job_id: number;

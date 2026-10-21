@@ -35,3 +35,12 @@ func (r Role) rank() int {
 func (r Role) AtLeast(required Role) bool {
 	return r.rank() >= required.rank()
 }
+
+// Max returns the higher-ranked of two roles. Used by per-resource RBAC where a
+// grant can only raise a user's effective role above their global one.
+func (r Role) Max(other Role) Role {
+	if other.rank() > r.rank() {
+		return other
+	}
+	return r
+}

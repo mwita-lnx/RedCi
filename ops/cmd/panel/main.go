@@ -189,6 +189,51 @@ func userCmd() *cobra.Command {
 	create.Flags().StringVar(&roleFlag, "role", "admin", "role: admin, deployer or viewer")
 	create.Flags().StringVar(&passwordFlag, "password", "", "password (skips interactive prompt; useful in CI/Docker)")
 	cmd.AddCommand(create)
+
+	// grant: raise a user's effective role on a specific site or bench above
+	// their global role (per-resource RBAC). Bench grants cover all their sites.
+	var gEmail, gRole string
+	var gSite, gBench int64
+	grant := &cobra.Command{
+		Use:   "grant",
+		Short: "Grant a user a role on a site or bench (raises their effective role there)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg := ops.LoadConfig()
+			db, authSvc, sealer, err := setup(cfg)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			if err := db.Migrate(cmd.Context()); err != nil {
+				return err
+			}
+			if gEmail == "" {
+				return fmt.Errorf("--email is required")
+			}
+			if (gSite == 0) == (gBench == 0) {
+				return fmt.Errorf("give exactly one of --site or --bench")
+			}
+			u, err := db.ReadQ.GetUserByEmail(cmd.Context(), gEmail)
+			if err != nil {
+				return fmt.Errorf("user %q not found", gEmail)
+			}
+			rt, rid := "site", gSite
+			if gBench != 0 {
+				rt, rid = "bench", gBench
+			}
+			srv := server.New(cfg, db, authSvc, sealer, events.New(), newLogger())
+			if err := srv.GrantResource(cmd.Context(), u.ID, rt, rid, gRole); err != nil {
+				return err
+			}
+			fmt.Printf("granted %s %s on %s %d\n", gEmail, gRole, rt, rid)
+			return nil
+		},
+	}
+	grant.Flags().StringVar(&gEmail, "email", "", "user email")
+	grant.Flags().Int64Var(&gSite, "site", 0, "site id to grant on")
+	grant.Flags().Int64Var(&gBench, "bench", 0, "bench id to grant on (covers its sites)")
+	grant.Flags().StringVar(&gRole, "role", "deployer", "role: viewer, deployer or admin")
+	cmd.AddCommand(grant)
 	return cmd
 }
 

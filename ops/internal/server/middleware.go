@@ -121,6 +121,26 @@ func (s *Server) requireRole(required auth.Role, next http.HandlerFunc) http.Han
 	})
 }
 
+// requireSiteRole gates a site-scoped endpoint (path param {id} = site id) by the
+// user's EFFECTIVE role on that site: max(global role, site grant, bench grant).
+// This lets a global viewer be a deployer on specific sites without widening
+// their access elsewhere. Falls back to the global role when the site id is
+// absent/unparseable (the handler then 404s as usual).
+func (s *Server) requireSiteRole(required auth.Role, next http.HandlerFunc) http.HandlerFunc {
+	return s.requireLogin(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := userFrom(r.Context())
+		eff := auth.Role(user.Role)
+		if id := pathID(r); id > 0 {
+			eff = s.effectiveSiteRole(r.Context(), user, id)
+		}
+		if !eff.AtLeast(required) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	})
+}
+
 // audit writes an audit_log row for a mutating action by the current user.
 func (s *Server) audit(r *http.Request, action, targetType string, targetID int64, detail string) {
 	params := store.InsertAuditParams{

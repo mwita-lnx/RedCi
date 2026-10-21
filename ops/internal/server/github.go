@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -138,6 +139,56 @@ func (s *Server) ghLatestCommit(ctx context.Context, repo, branch string) string
 		return ""
 	}
 	return c.SHA
+}
+
+// repoRef identifies a repo+branch pair for batch latest-commit resolution.
+type repoRef struct{ Repo, Branch string }
+
+// ghLatestCommits resolves the head SHA for many repo@branch pairs concurrently
+// (bounded pool), deduping identical refs. A page listing N apps that each need
+// a GitHub round-trip would otherwise block for N * RTT serially (e.g. a 19-app
+// bench ~ 10s); this collapses it to a few parallel rounds. Best-effort: a ref
+// that errors maps to "". Returns a map keyed by the repoRef.
+func (s *Server) ghLatestCommits(ctx context.Context, refs []repoRef) map[repoRef]string {
+	out := make(map[repoRef]string, len(refs))
+	if s.ghToken(ctx) == "" {
+		return out
+	}
+	// Dedupe.
+	uniq := make([]repoRef, 0, len(refs))
+	seen := map[repoRef]bool{}
+	for _, r := range refs {
+		if r.Repo == "" || !validRepo(r.Repo) || seen[r] {
+			continue
+		}
+		seen[r] = true
+		uniq = append(uniq, r)
+	}
+
+	const workers = 8
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+	ch := make(chan repoRef)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for r := range ch {
+				sha := s.ghLatestCommit(ctx, r.Repo, r.Branch)
+				mu.Lock()
+				out[r] = sha
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, r := range uniq {
+		ch <- r
+	}
+	close(ch)
+	wg.Wait()
+	return out
 }
 
 // ghListDockerfiles returns the repo-relative paths of every Dockerfile in a

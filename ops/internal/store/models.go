@@ -148,6 +148,15 @@ type ProxyRoute struct {
 	NginxPath     sql.NullString `json:"nginx_path"`
 }
 
+type ResourceGrant struct {
+	ID           int64  `json:"id"`
+	UserID       int64  `json:"user_id"`
+	ResourceType string `json:"resource_type"`
+	ResourceID   int64  `json:"resource_id"`
+	Role         string `json:"role"`
+	CreatedAt    int64  `json:"created_at"`
+}
+
 type Secret struct {
 	Name      string `json:"name"`
 	ValueEnc  []byte `json:"value_enc"`

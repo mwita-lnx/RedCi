@@ -57,6 +57,7 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	// Web apps -------------------------------------------------------------------
 	CreateWebApp(ctx context.Context, arg CreateWebAppParams) (WebApp, error)
+	DeleteGrant(ctx context.Context, arg DeleteGrantParams) error
 	DeletePipeline(ctx context.Context, id int64) error
 	DeletePipelineEnvs(ctx context.Context, pipelineID int64) error
 	DeleteSecret(ctx context.Context, name string) error
@@ -77,6 +78,7 @@ type Querier interface {
 	GetBench(ctx context.Context, id int64) (Bench, error)
 	GetDeploy(ctx context.Context, id int64) (Deploy, error)
 	GetDeployPoint(ctx context.Context, arg GetDeployPointParams) (FrappeDeployPoint, error)
+	GetGrant(ctx context.Context, id int64) (ResourceGrant, error)
 	GetJob(ctx context.Context, id int64) (Job, error)
 	GetPipeline(ctx context.Context, id int64) (Pipeline, error)
 	GetPipelineEnvByDeploy(ctx context.Context, lastDeployID sql.NullInt64) (PipelineEnv, error)
@@ -93,6 +95,9 @@ type Querier interface {
 	GetWebApp(ctx context.Context, id int64) (WebApp, error)
 	GetWebAppByName(ctx context.Context, name string) (WebApp, error)
 	GetWebhookDelivery(ctx context.Context, deliveryID string) (string, error)
+	// All grants for a user (used by the effective-role resolver). Same as above
+	// but named for intent at the call site.
+	GrantsForUser(ctx context.Context, userID int64) ([]GrantsForUserRow, error)
 	Heartbeat(ctx context.Context, arg HeartbeatParams) error
 	InsertAudit(ctx context.Context, arg InsertAuditParams) error
 	InsertJobLog(ctx context.Context, arg InsertJobLogParams) error
@@ -107,6 +112,7 @@ type Querier interface {
 	// each environment runs on, its domain, and its deploy status.
 	ListEnvsForPipeline(ctx context.Context, pipelineID int64) ([]ListEnvsForPipelineRow, error)
 	ListFrappeAppsForBench(ctx context.Context, benchID int64) ([]FrappeApp, error)
+	ListGrantsForUser(ctx context.Context, userID int64) ([]ResourceGrant, error)
 	ListJobLogs(ctx context.Context, arg ListJobLogsParams) ([]JobLog, error)
 	ListJobsForDeploy(ctx context.Context, deployID sql.NullInt64) ([]Job, error)
 	ListPipelines(ctx context.Context) ([]Pipeline, error)
@@ -162,6 +168,8 @@ type Querier interface {
 	UpdateDiscoveredRoute(ctx context.Context, arg UpdateDiscoveredRouteParams) error
 	UpdateSiteApps(ctx context.Context, arg UpdateSiteAppsParams) error
 	UpsertDeployPoint(ctx context.Context, arg UpsertDeployPointParams) error
+	// Add or update a grant. Re-granting the same (user, resource) replaces the role.
+	UpsertGrant(ctx context.Context, arg UpsertGrantParams) (ResourceGrant, error)
 	WebAppsForSource(ctx context.Context, appSourceID sql.NullInt64) ([]WebApp, error)
 }
 

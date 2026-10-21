@@ -15,6 +15,16 @@ func (s *Server) PutSecretForTest(ctx context.Context, name, value string) error
 	return s.putSecret(ctx, name, value)
 }
 
+// EffectiveSiteRoleForTest exposes the per-resource role resolver to the
+// integration tests (which live in package server_test).
+func (s *Server) EffectiveSiteRoleForTest(ctx context.Context, userID, siteID int64) (string, error) {
+	u, err := s.db.ReadQ.GetUserByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return string(s.effectiveSiteRole(ctx, u, siteID)), nil
+}
+
 // AdoptWebAppCommit records the commit a web app is already running on disk,
 // without a deploy — used to reflect the real state of an app that was deployed
 // outside RedCi (manual pm2/docker). It sets current_commit and flips status to

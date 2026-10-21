@@ -120,6 +120,10 @@ func (s *Server) apiSiteDetail(w http.ResponseWriter, r *http.Request) {
 		Rollbackable bool   `json:"rollbackable"`
 	}
 	apps := make([]appInfo, 0, len(installedApps))
+	// Collect each app's repo@branch so the GitHub latest-commit lookups run in
+	// one concurrent, deduped batch instead of a blocking call per app (a site on
+	// a 19-app bench was taking ~10s serially).
+	refs := make([]repoRef, 0, len(installedApps))
 	for _, name := range installedApps {
 		fa := gitMap[name]
 		ai := appInfo{Name: name}
@@ -135,18 +139,22 @@ func (s *Server) apiSiteDetail(w http.ResponseWriter, r *http.Request) {
 		if fa.GitRemote.Valid {
 			ai.Repo = fa.GitRemote.String
 		}
-		// Latest commit on the remote branch (best-effort; needs a GitHub token
-		// and a github.com remote). Empty when unavailable.
-		if ai.Repo != "" && ai.Branch != "" {
-			ai.RemoteCommit = s.ghLatestCommit(ctx, ai.Repo, ai.Branch)
-		}
-		ai.UpToDate = ai.BenchCommit != "" && ai.BenchCommit == ai.RemoteCommit
 		if _, err := s.db.ReadQ.GetDeployPoint(ctx, store.GetDeployPointParams{
 			BenchID: site.BenchID, AppName: name,
 		}); err == nil {
 			ai.Rollbackable = true
 		}
 		apps = append(apps, ai)
+		refs = append(refs, repoRef{Repo: ai.Repo, Branch: ai.Branch})
+	}
+	// Resolve latest remote commits concurrently (best-effort; needs a GitHub
+	// token + github.com remote), then fill remote_commit / up_to_date.
+	latestByRef := s.ghLatestCommits(ctx, refs)
+	for i := range apps {
+		if apps[i].Repo != "" && apps[i].Branch != "" {
+			apps[i].RemoteCommit = latestByRef[refs[i]]
+		}
+		apps[i].UpToDate = apps[i].BenchCommit != "" && apps[i].BenchCommit == apps[i].RemoteCommit
 	}
 	resp := siteJSON(site)
 	resp["apps"] = apps
@@ -600,17 +608,13 @@ func (s *Server) apiBenchDetail(w http.ResponseWriter, r *http.Request) {
 	for _, src := range allSources {
 		srcByID[src.ID] = src
 	}
-	hasToken := s.ghToken(ctx) != ""
-	getLatest := func(repo, branch string) string {
-		if !hasToken || !validRepo(repo) {
-			return ""
-		}
-		return s.ghLatestCommit(ctx, repo, branch)
-	}
-
 	apps, _ := s.db.ReadQ.ListFrappeAppsForBench(ctx, b.ID)
 	appOut := make([]map[string]any, 0, len(apps))
-	for _, a := range apps {
+	// Collect each app's resolved repo@branch so every GitHub latest-commit
+	// lookup runs once, concurrently, after the loop (instead of one blocking
+	// call per app — a 19-app bench was taking ~10s serially).
+	appRefs := make([]repoRef, len(apps))
+	for i, a := range apps {
 		cur := ""
 		if a.CurrentCommit.Valid {
 			cur = a.CurrentCommit.String
@@ -663,12 +667,19 @@ func (s *Server) apiBenchDetail(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		// Resolve the remote's latest commit from whatever repo+branch we have,
-		// regardless of whether a source is linked (mirrors SiteDetail).
+		// Record the repo+branch so its latest commit is resolved in a single
+		// concurrent batch below (regardless of whether a source is linked).
 		if repo != "" && branch != "" {
-			entry["latest_commit"] = getLatest(repo, branch)
+			appRefs[i] = repoRef{Repo: repo, Branch: branch}
 		}
 		appOut = append(appOut, entry)
+	}
+	// One concurrent, deduped round of GitHub lookups for every app's ref.
+	latestByRef := s.ghLatestCommits(ctx, appRefs)
+	for i, ref := range appRefs {
+		if ref.Repo != "" {
+			appOut[i]["latest_commit"] = latestByRef[ref]
+		}
 	}
 
 	sitesForBench, _ := s.db.ReadQ.SitesForBench(ctx, b.ID)
@@ -1441,14 +1452,17 @@ func (s *Server) registerAPIRoutes() {
 	m.HandleFunc("GET /api/v1/dashboard", s.requireRole(auth.RoleViewer, s.apiDashboard))
 
 	m.HandleFunc("GET /api/v1/sites", s.requireRole(auth.RoleViewer, s.apiSites))
-	m.HandleFunc("GET /api/v1/sites/{id}", s.requireRole(auth.RoleViewer, s.apiSiteDetail))
+	// Site-scoped: gated by the user's EFFECTIVE role on the site (global role
+	// raised by any site/bench grant). Create (POST /sites) is not site-scoped
+	// yet (no site exists), so it stays on the global admin role.
+	m.HandleFunc("GET /api/v1/sites/{id}", s.requireSiteRole(auth.RoleViewer, s.apiSiteDetail))
 	m.HandleFunc("POST /api/v1/sites", s.requireRole(auth.RoleAdmin, s.apiNewSite))
-	m.HandleFunc("POST /api/v1/sites/{id}/delete", s.requireRole(auth.RoleAdmin, s.apiSiteDelete))
-	m.HandleFunc("POST /api/v1/sites/{id}/backup", s.requireRole(auth.RoleDeployer, s.apiSiteBackup))
-	m.HandleFunc("POST /api/v1/sites/{id}/refresh", s.requireRole(auth.RoleAdmin, s.apiSiteRefresh))
-	m.HandleFunc("POST /api/v1/sites/{id}/apps/{app}/rollback", s.requireRole(auth.RoleDeployer, s.apiSiteRollback))
+	m.HandleFunc("POST /api/v1/sites/{id}/delete", s.requireSiteRole(auth.RoleAdmin, s.apiSiteDelete))
+	m.HandleFunc("POST /api/v1/sites/{id}/backup", s.requireSiteRole(auth.RoleDeployer, s.apiSiteBackup))
+	m.HandleFunc("POST /api/v1/sites/{id}/refresh", s.requireSiteRole(auth.RoleAdmin, s.apiSiteRefresh))
+	m.HandleFunc("POST /api/v1/sites/{id}/apps/{app}/rollback", s.requireSiteRole(auth.RoleDeployer, s.apiSiteRollback))
 	m.HandleFunc("POST /api/v1/benches/{id}/apps/install", s.requireRole(auth.RoleDeployer, s.apiBenchAppInstall))
-	m.HandleFunc("POST /api/v1/sites/{id}/apps/{app}/uninstall", s.requireRole(auth.RoleDeployer, s.apiSiteAppUninstall))
+	m.HandleFunc("POST /api/v1/sites/{id}/apps/{app}/uninstall", s.requireSiteRole(auth.RoleDeployer, s.apiSiteAppUninstall))
 	m.HandleFunc("GET /api/v1/benches", s.requireRole(auth.RoleViewer, s.apiBenches))
 	m.HandleFunc("GET /api/v1/benches/overview", s.requireRole(auth.RoleViewer, s.apiBenchesOverview))
 	m.HandleFunc("GET /api/v1/benches/{id}", s.requireRole(auth.RoleViewer, s.apiBenchDetail))
@@ -1479,6 +1493,9 @@ func (s *Server) registerAPIRoutes() {
 	m.HandleFunc("POST /api/v1/routes/{id}/apply", s.requireRole(auth.RoleAdmin, s.apiRouteApply))
 
 	m.HandleFunc("GET /api/v1/users", s.requireRole(auth.RoleAdmin, s.apiUsers))
+	m.HandleFunc("GET /api/v1/users/{id}/grants", s.requireRole(auth.RoleAdmin, s.apiListGrants))
+	m.HandleFunc("POST /api/v1/users/{id}/grants", s.requireRole(auth.RoleAdmin, s.apiAddGrant))
+	m.HandleFunc("DELETE /api/v1/users/{id}/grants/{grantId}", s.requireRole(auth.RoleAdmin, s.apiDeleteGrant))
 	m.HandleFunc("GET /api/v1/audit", s.requireRole(auth.RoleViewer, s.apiAudit))
 
 	m.HandleFunc("GET /api/v1/github/status", s.requireRole(auth.RoleViewer, s.apiGithubStatus))
